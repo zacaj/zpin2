@@ -158,7 +158,7 @@ export class IncreaseSolenoid extends MomentarySolenoid {
   override async fire(): Promise<boolean|number> {
     let fired: boolean|number = false;
     // if (!this.lastFired)
-      fired = await super.fire(this.initial);
+    fired = await super.fire(this.initial);
     // else {
     //   if (time() > (this.lastFired + this.resetPeriod)) {
     //     this.i = 0;
@@ -264,6 +264,6 @@ if (require.main === module) {
 
   });
   void coil.init().then(() => {
-    return coil.set(true)
-  })
+    return coil.set(true);
+  });
 }

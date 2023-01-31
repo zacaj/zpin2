@@ -13,6 +13,7 @@ module.exports = {
   },
   ignorePatterns: [
     "node_modules/",
+    ".eslintrc.js",
   ],
   env: {
     node: true,
@@ -37,7 +38,7 @@ module.exports = {
     }],
     "@typescript-eslint/no-array-constructor": on,
     "@typescript-eslint/no-confusing-non-null-assertion": on,
-    "@typescript-eslint/no-confusing-void-expression": on,
+    "@typescript-eslint/no-confusing-void-expression": [on, { ignoreArrowShorthand: true} ],
     "@typescript-eslint/no-duplicate-enum-values": on,
     "@typescript-eslint/no-extra-non-null-assertion": on,
     "@typescript-eslint/no-floating-promises": [on, {ignoreVoid: true}],
@@ -51,7 +52,7 @@ module.exports = {
     "@typescript-eslint/no-unsafe-argument": on,
     "@typescript-eslint/no-unsafe-assignment": on,
     "@typescript-eslint/no-unsafe-call": on,
-    "@typescript-eslint/no-unsafe-member-access": on,
+    "@typescript-eslint/no-unsafe-member-access": off,
     "@typescript-eslint/no-unsafe-return": on,
     "@typescript-eslint/no-unused-expressions": off,
     "@typescript-eslint/non-nullable-type-assertion-style": on,
@@ -85,14 +86,17 @@ module.exports = {
     "arrow-spacing": on,
     "brace-style": off,
     "@typescript-eslint/brace-style": off,
-    "class-methods-use-this": on,
+    "class-methods-use-this": off,
     "comma-dangle": off,
     "@typescript-eslint/comma-dangle": [on, {
       "arrays": "always-multiline",
       "objects": "always-multiline",
       "imports": "always-multiline",
       "exports": "always-multiline",
-      "functions": "always-multiline"
+      "functions": "always-multiline",
+      "enums": "always-multiline",
+      "generics": "always-multiline",
+      "tuples": "always-multiline",
     }],
     "comma-spacing": off,
     "complexity": on,
@@ -182,7 +186,12 @@ module.exports = {
       "classes": false,
     }],
     "no-use-before-define": off,
-    "@typescript-eslint/no-use-before-define": on,
+    "@typescript-eslint/no-use-before-define": [on, {
+      "functions": false,
+      "classes": false,
+      enums: false,
+      typedefs: false,
+    }],
     "no-undefined": off,
     "no-unreachable": off,
     "no-unused-vars": off,
@@ -221,5 +230,11 @@ module.exports = {
     ],
     "use-isnan": on,
     "valid-typeof": on,
+
+    //sonarjs rules
+    "sonarjs/no-small-switch": off,
+    "outputState": off,
+    "sonarjs/cognitive-complexity": off,
+    "sonarjs/prefer-immediate-return": off,
   }
 };

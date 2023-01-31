@@ -12,7 +12,58 @@
 
     /* Language and Environment */
     "target": "esnext",                                  /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
-    // "lib": [],                                        /* Specify a set of bundled library declaration files that describe the target runtime environment. */
+    "lib": [
+      "esnext",
+    //   "ES2015.Collection",
+      // "ES2015.Core",
+    //   "ES2015.Generator",
+    //   "ES2015.Iterable",
+    //   "ES2015.Promise",
+    //   "ES2015.Proxy",
+    //   "ES2015.Reflect",
+    //   "ES2015.Symbol.WellKnown",
+    //   "ES2015.Symbol",
+    //   "ES2016.Array.Include",
+    //   "ES2017.Intl",
+    //   "ES2017.Object",
+    //   "ES2017.SharedMemory",
+    //   "ES2017.String",
+    //   "ES2017.TypedArrays",
+    //   "ES2018",
+    //   "ES2018.AsyncGenerator",
+    //   "ES2018.AsyncIterable",
+    //   "ES2018.Intl",
+    //   "ES2018.Promise",
+    //   "ES2018.Regexp",
+    //   "ES2019.Array",
+    //   "ES2019.Object",
+    //   "ES2019.String",
+    //   "ES2019.Symbol",
+    //   "ES2020.BigInt",
+    //   "ES2020.Promise",
+    //   "ES2020.String",
+    //   "ES2020.Symbol.WellKnown",
+    //   "ESNext.Array",
+    //   "ESNext.AsyncIterable",
+    //   "ESNext.BigInt",
+    //   "ESNext.Intl",
+    //   "ESNext.Promise",
+    //   "ESNext.String",
+    //   "ESNext.Symbol",
+      // "DOM",
+    //   "DOM.Iterable",
+    //   "ScriptHost",
+    //   "WebWorker",
+    //   "WebWorker.ImportScripts",
+    //   "Webworker.Iterable",
+    //   "ES2020.SharedMemory",
+    //   "ES2020.Intl",
+    //   "ES2021.Promise",
+    //   "ES2021.String",
+    //   "ES2021.WeakRef",
+    //   "ESNext.WeakRef",
+    //   "es2021.intl"
+    ],                                        /* Specify a set of bundled library declaration files that describe the target runtime environment. */
     // "jsx": "preserve",                                /* Specify what JSX code is generated. */
     "experimentalDecorators": true,                   /* Enable experimental support for TC39 stage 2 draft decorators. */
     "emitDecoratorMetadata": true,                    /* Emit design-type metadata for decorated declarations in source files. */
@@ -28,11 +79,15 @@
     "module": "commonjs",                                /* Specify what module code is generated. */
     // "rootDir": "./",                                  /* Specify the root folder within your source files. */
     "moduleResolution": "node",                       /* Specify how TypeScript looks up a file from a given module specifier. */
-    // "baseUrl": "./",                                  /* Specify the base directory to resolve non-relative module names. */
-    // "paths": {},                                      /* Specify a set of entries that re-map imports to additional lookup locations. */
+    "baseUrl": "./",                                  /* Specify the base directory to resolve non-relative module names. */
+    "paths": {
+      "aminogfx-gl": ["../aminogfx-gl"],
+    },                                      /* Specify a set of entries that re-map imports to additional lookup locations. */
     // "rootDirs": [],                                   /* Allow multiple folders to be treated as one when resolving modules. */
     // "typeRoots": [],                                  /* Specify multiple folders that act like './node_modules/@types'. */
-    // "types": [],                                      /* Specify type package names to be included without being referenced in a source file. */
+    // "types": [
+      // "@types/jest",
+    // ],                                      /* Specify type package names to be included without being referenced in a source file. */
     // "allowUmdGlobalAccess": true,                     /* Allow accessing UMD globals from modules. */
     // "moduleSuffixes": [],                             /* List of file name suffixes to search when resolving a module. */
     // "resolveJsonModule": true,                        /* Enable importing .json files. */
@@ -103,6 +158,41 @@
 	"compileOnSave": true,
 	
 	"include": [
-		"src/**/*"
-	]
+		"src/**/*",
+	],
+  // "files": [
+  //   "node_modules/typescript/lib/lib.es5.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Collection.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Core.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Generator.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Iterable.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Promise.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Proxy.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Reflect.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Symbol.WellKnown.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2015.Symbol.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2016.Array.Include.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2017.Intl.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2017.Object.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2017.SharedMemory.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2017.String.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2017.TypedArrays.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2018.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2018.AsyncGenerator.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2018.AsyncIterable.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2018.Intl.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2018.Promise.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2018.Regexp.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2019.Array.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2019.Object.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2019.String.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2019.Symbol.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2020.BigInt.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2020.Promise.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2020.String.d.ts",
+  //   "node_modules/typescript/lib/lib.ES2020.Symbol.WellKnown.d.ts",
+  //   "node_modules/typescript/lib/lib.ESNext.Intl.d.ts",
+  //   "node_modules/typescript/lib/lib.ESNext.Promise.d.ts",
+  //   "node_modules/typescript/lib/lib.ESNext.String.d.ts",
+  // ],
 }

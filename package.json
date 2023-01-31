@@ -11,16 +11,24 @@
   },
   "author": "zacaj",
   "dependencies": {
-    "yargs": "^16.0.3"
+    "@serialport/parser-delimiter": "^10.3.0",
+    "@types/seedrandom": "^3.0.2",
+    "aminogfx-gl": "file:../aminogfx-gl",
+    "rpi-gpio": "^2.1.7",
+    "seedrandom": "^3.0.5",
+    "serialport": "^10.4.0",
+    "yargs": "^17.6.2"
   },
   "devDependencies": {
     "@types/jest": "^29.1.2",
-    "@types/node": "^18.8.5",
+    "@types/node": "file:./node-types",
+    "@types/rpi-gpio": "^2.1.1",
     "@typescript-eslint/eslint-plugin": "^5.40.0",
     "@typescript-eslint/parser": "^5.40.0",
     "eslint": "^8.25.0",
     "eslint-plugin-sonarjs": "^0.16.0",
     "jest": "^29.1.2",
+    "scp2": "^0.5.0",
     "ts-jest": "^29.0.3",
     "typescript": "^4.8.4"
   }

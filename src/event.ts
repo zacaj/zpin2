@@ -2,7 +2,7 @@ import { DelimiterParser, SerialPort } from "serialport";
 import { Log } from "./log";
 import { machine } from "./machine";
 import { Switch } from "./switch";
-import { Clock } from "./timer";
+import { clock } from "./time";
 
 export class EventSource {
 
@@ -14,8 +14,8 @@ export class Event {
 
   constructor(
     public source: EventSource,
-    public rawData: Buffer,
-    public when = Clock.time,
+    public rawData: any,
+    public when = clock(),
   ) {
       
   }
@@ -26,8 +26,8 @@ export class Event {
 
   static new(
     source: EventSource,
-    rawData: Buffer,
-    when = Clock.time,
+    rawData: any,
+    when = clock(),
   ): Event {
     return new Event(source, rawData, when);
   }
@@ -41,6 +41,10 @@ export class Events {
   //   this.listeners.set(["/dev/ttyAMA0"/*, "/dev/ttyAMA1", "/dev/ttyAMA2", "/dev/ttyAMA3"*/].map((path, i) => 
   //     new SerialListener(path, buf => this.pending.push(Event.new(Object.values(EventSource)[i] as EventSource, buf)))));
   // }
+
+  static resetAll() {
+    this.pending = [];
+  }
 
   static getPending(): Event[] {
     const p = this.pending;
@@ -67,7 +71,7 @@ export class SwitchEvent extends Event {
     public sw: Switch,
     public state: boolean,
     source: EventSource,
-    rawData: Buffer,
+    rawData: any,
   ) {
     super(source, rawData);
   }

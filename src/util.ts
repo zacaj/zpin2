@@ -60,7 +60,6 @@ export function arrayify<T>(data?: OrArray<T>): T[] {
   else return [data];
 }
 
-export interface Obj { [prop: string]: any }
 export type NonFunctionPropertyNames<T> = { [K in keyof T]: T[K] extends (...args: any[]) => any ? never : K }[keyof T] &
 string;
 export type FunctionPropertyNames<T> = { [K in keyof T]: T[K] extends (...args: any[]) => any ? K : never }[keyof T] &
@@ -213,7 +212,7 @@ export function clone<T extends Obj>(obj: T): T {
   return Object.create(
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     Object.getPrototypeOf(obj), 
-    objectMap(Object.getOwnPropertyDescriptors(obj), (d, k) => ({
+    objectMap(Object.getOwnPropertyDescriptors(obj) as any, (d: Obj, k) => ({
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       value: 'value' in d? d.value : (obj)[k],
       configurable: d.configurable,
@@ -347,22 +346,22 @@ export function eq<T>(a: T, b: T): boolean {
   return a === b;
 }
 
-interface ObjOf<T> {
+export interface Obj<T = any> {
   [key: PropertyKey]: T;
 }
 
 
-export interface Dict<T> {
+export interface Dict<T = any> {
   [key: string]: T;
 }
 
 export function objectMap<TValue, TResult>(
-  obj: ObjOf<TValue>,
-  valSelector: (val: TValue, key: string) => TResult,
-  keySelector?: (key: string, obj: ObjOf<TValue>) => string,
-  ctx?: ObjOf<TValue>,
+  obj: Obj<TValue>,
+  valSelector: (val: TValue, key: PropertyKey) => TResult,
+  keySelector?: (key: string, obj: Dict<TValue>) => PropertyKey,
+  ctx?: Obj<TValue>,
 ) {
-  const ret = {} as ObjOf<TResult>;
+  const ret = {} as Obj<TResult>;
   for (const key of Object.keys(obj)) {
     const retKey = keySelector
       ? keySelector.call(ctx ?? null, key, obj)
@@ -372,6 +371,35 @@ export function objectMap<TValue, TResult>(
   }
   return ret;
 }
+
+export function objectFilterMap<TValue, TResult>(
+  obj: Obj<TValue>,
+  keySelector: (val: TValue, key: string, obj: Obj<TValue>) => PropertyKey | boolean,
+  valSelector: (val: TValue, key: string, obj: Obj<TValue>) => TResult,
+  ctx?: Obj<TValue>,
+) {
+  const ret = {} as Obj<TResult>;
+  for (const key of Object.keys(obj)) {
+    let retKey = keySelector.call(ctx ?? null, obj[key], key, obj);
+    if (!retKey) continue;
+    if (retKey === true) retKey = key;
+    const retVal = valSelector.call(ctx ?? null, obj[key], key, obj);
+    ret[retKey] = retVal;
+  }
+  return ret;
+}
+
+export function objectFilter(obj: Obj, pred: (val: any, key: PropertyKey) => boolean): Obj {
+  const ret = {} as Obj;
+
+  for (const key of Object.keys(obj)) {
+    if (pred(obj[key], key))
+      ret[key] = obj[key];
+  }
+  return ret;
+}
+
+export const id = <T>(x: T) => x;
 
 export function isPromise(promise?: any): boolean {
   return !!promise?.then;

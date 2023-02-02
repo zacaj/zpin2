@@ -1,4 +1,5 @@
 import { Log } from "./log";
+import { LightOutputs, Output } from "./machine";
 
 export enum Color {
   Red = 'Red',
@@ -15,7 +16,26 @@ export enum Color {
 
 export type LightState = Color|null;
 
+export type Frequency = number;
 
+export type NormalizedLight = {
+  color: Color;
+  type: 'solid'|'pulsing'|'flashing';
+  freq: Frequency;
+  phase: number;
+  dutyCycle: number;
+};
+
+export function normalizeLight(l: LightState): NormalizedLight|undefined {
+  if (!l) return;
+  return {
+    color: l,
+    type: "solid",
+    freq: 0,
+    phase: 0,
+    dutyCycle: 0,
+  };
+}
 
 export function colorToHex(color: Color): string|undefined {
   if (typeof color === "string" && color.startsWith("#"))

@@ -1,21 +1,30 @@
 import { DelimiterParser, SerialPort } from "serialport";
 import { BoardBootEvent, Event, Events, EventSource, SwitchEvent } from "./event";
 import { Log } from "./log";
-import { Solenoid } from "./solenoid";
+import { Init, machine } from "./machine";
+import { Solenoid } from "./machine";
 import { Switch } from "./switch";
+import { Clock } from "./time";
 
 
-export class Board extends EventSource {
+export class Board extends EventSource implements Init {
   coils: Solenoid[] = [];
   switches: Switch[] = [];
+  isConnected = false;
 
-  async start() {
+  timeOffset = 0 as Clock; // add to remote time to get local
+  adjust(time: number|string): Clock { // convert remote time to local
+    if (typeof time === 'string') time = parseFloat(time);
+    return (time + (this.timeOffset as number)) as Clock;
+  };
+
+  async init() {
 
   }
 
   async stop() {
 
-  }
+  }  
 }
 
 export class SerialBoard extends Board {
@@ -35,10 +44,12 @@ export class SerialBoard extends Board {
     this.parser = this.port.pipe(new DelimiterParser({ delimiter: Buffer.from([SerialBoard.EndByte]) }));
   }
 
-  override async start() {
+  override async init() {
+    if (!machine.isLive) return;
     await new Promise<void>((resolve, reject) => this.port.open(err => err? reject(err) : resolve()));
     Log.log('mpu', 'opened connection to %s', this.path);
     this.parser.on('data', (buffer: Buffer) => {
+      this.isConnected = true;
       const dataStr = `'${buffer.toString("ascii")}'/${buffer.toString('hex')}`;
       Log.info('mpu', 'Got data on UART %s: %s ', this.path, dataStr);
       const startIndex = buffer.lastIndexOf(SerialBoard.StartByte)+1;
@@ -62,8 +73,9 @@ export class SerialBoard extends Board {
       function onEvent(e: Event) {
         Events.pending.push(e);
       }
-      if (str.startsWith('hello'))
+      if (str.startsWith('hello')) {
         onEvent(new BoardBootEvent(this, cmd));
+      }
       else if (str.startsWith('de ') || str.startsWith('sw ')) {
         const inputs = Number.parseInt(str.substring(3), 16);
         if (inputs === this.lastInputState)
@@ -77,7 +89,7 @@ export class SerialBoard extends Board {
               if (!sw)
                 Log.error('mpu', 'got event for unknown switch %i -> %s on board %s', i, newState>0, this.path);
               else
-                onEvent(new SwitchEvent(sw, newState>0, this, cmd));
+                onEvent(new SwitchEvent(sw, (newState>0) !== sw.inverted, this, cmd));
             }
           }
           this.lastInputState = inputs;
@@ -91,6 +103,7 @@ export class SerialBoard extends Board {
     });
     this.port.on('close', () => {
       Log.info('mpu', '%s closed', this.path);
+      this.isConnected = false;
     });
   }
 
@@ -106,7 +119,8 @@ export class SerialBoard extends Board {
     data.writeUInt8(checksum, cmd.length + 2);
     data.writeUInt8(SerialBoard.EndByte, cmd.length + 3);
 
-    Log.info('mpu', 'Send command ', data.toString('hex'));
+    Log.info('mpu', (machine.isLive?'(fake) ': '') + 'Send command ', data.toString('hex'));
+    if (!machine.isLive) return;
     await new Promise<void>((resolve, reject) =>
       this.port.write(data, undefined, (err) => err? reject(err) : resolve()));
     return new Promise<void>((resolve, reject) =>
@@ -125,7 +139,7 @@ export class SerialBoard extends Board {
 if (require.main === module) {
   Log.init(false, false);
   const board = new SerialBoard('/dev/ttyAMA0');
-  void board.start().then(async () => {
+  void board.init().then(async () => {
     
     function loop(events: Event[]): ReturnType<typeof setImmediate> {
     

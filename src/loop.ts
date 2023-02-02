@@ -1,14 +1,12 @@
 import { Events, Event } from "./event";
+import { gfxLoop } from "./gfx";
 import { machine, Machine } from "./machine";
 
 
-export function loop(events: Event[]): ReturnType<typeof setImmediate> {
-  for (const sw of machine.switches) {
-    sw.closed = false;
-    sw.opened = false;  
-  }
+export function loop(events = Events.getPending()): ReturnType<typeof setImmediate> {
 
-  machine.root.loop(events);
+  machine.loop(events);
+  gfxLoop(events);
 
-  return setImmediate(() => loop(Events.getPending()));
+  return setImmediate(() => loop());
 }

@@ -49,8 +49,8 @@ module.exports = {
     "@typescript-eslint/no-non-null-asserted-nullish-coalescing": on,
     "@typescript-eslint/no-non-null-asserted-optional-chain": on,
     "@typescript-eslint/no-unnecessary-condition": on,
-    "@typescript-eslint/no-unsafe-argument": on,
-    "@typescript-eslint/no-unsafe-assignment": on,
+    "@typescript-eslint/no-unsafe-argument": off,
+    "@typescript-eslint/no-unsafe-assignment": off,
     "@typescript-eslint/no-unsafe-call": on,
     "@typescript-eslint/no-unsafe-member-access": off,
     "@typescript-eslint/no-unsafe-return": on,
@@ -236,5 +236,6 @@ module.exports = {
     "outputState": off,
     "sonarjs/cognitive-complexity": off,
     "sonarjs/prefer-immediate-return": off,
+    "sonarjs/no-collapsible-if": off,
   }
 };

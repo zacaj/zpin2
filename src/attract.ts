@@ -4,6 +4,6 @@ import { Mode } from "./mode";
 
 export class AttractMode extends Mode {
   update(events: Event[], out: Partial<Outputs>): void {
-    out.rightScoop = machine.sRightScoop.settled();
+    out.rightScoop = machine.sRightScoop.settled;
   }
 }

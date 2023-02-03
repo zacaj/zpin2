@@ -1,3 +1,4 @@
+import { boolean } from "yargs";
 import { AttractMode } from "./attract";
 import { Board, SerialBoard } from "./board";
 import { Event, SwitchEvent } from "./event";
@@ -7,7 +8,7 @@ import { Log } from "./log";
 import { MPU } from "./mpu";
 import { Node } from "./node";
 import { Switch } from "./switch";
-import { Clock, frame, Timer } from "./time";
+import { Clock, frame, Timer, clock, Timestamp } from "./time";
 import { assert, eq, id, Obj, objectFilter, objectFilterMap, objectMap, then } from "./util";
 
 export interface Init {
@@ -38,7 +39,7 @@ export abstract class Output<T, Outs = Outputs> implements Init {
     //   this.timer = Timer.callIn(() => this.trySet(), 100, `delayed no-power retry set ${this.name} to ${this.val}`);
     //   return undefined;
     // }
-    Log[this instanceof Solenoid? 'log':'trace'](['machine'], 'try set %s to ', this.name, this.pending);
+    Log[this instanceof Coil? 'log':'trace'](['machine'], 'try set %s to ', this.name, this.pending);
     return then(this.set(this.pending), success => {
       // try {
       if (success instanceof Error) {
@@ -66,13 +67,19 @@ export abstract class Output<T, Outs = Outputs> implements Init {
     });
   }
 
-  loop() {
+  update() {
     void this.trySet();
   }
 
   abstract init(): Promise<void>;
 
   abstract set(val: T): Promise<boolean>|boolean;
+}
+class VarOutput<T> extends Output<T> {
+  override async init() {}
+  override async set(val: T) {
+    return true;
+  }
 }
 
 // export class OutputState {
@@ -100,57 +107,51 @@ export type CoilConfig = {
   holdOffDms: number;
 };
 
-export abstract class Solenoid extends Output<boolean, CoilOutputs> {
-
-  static firingUntil?: Clock;
-  config!: CoilConfig;
+export class Coil extends Output<boolean, CoilOutputs> {
+  static dontFireBefore = clock.stamp();
+  private config!: CoilConfig;
+  lastFired?: Timestamp<Clock>;
+  private configDirty = true;
 
   constructor(
     name: keyof CoilOutputs,
     public num: number,
     public board: SerialBoard,
     cfg?: Partial<CoilConfig>,
+    public wait = 1000 as Clock, // min time between fire attempts
+    public fake?: () => void,
   ) {
     super(false, name);
 
     this.config = {
       holdLength: 0,
       holdOffDms: 0,
-      holdOnDms: 1,
+      holdOnDms: 10,
       strokeLength: 0,
       strokeOffDms: 0,
-      strokeOnDms: 1,
+      strokeOnDms: 10,
       ...cfg,
     };
   }
 
-  async updateConfig() {
-    const buf = Buffer.alloc(11);
-    buf.write('CS');
-    buf.writeUint8(this.num, 2);
-    buf.writeUInt16BE(this.config.strokeLength, 3);
-    buf.writeUint8(this.config.strokeOnDms, 5);
-    buf.writeUint8(this.config.strokeOffDms, 6);
-    buf.writeUInt16BE(this.config.holdLength, 7);
-    buf.writeUint8(this.config.holdOnDms, 9);
-    buf.writeUint8(this.config.holdOffDms, 10);
-    await this.board.sendCommand(buf);
+  ms(ms: number, off?: number, on?: number): this {
+    this.config.strokeLength = ms;
+    if (off !== undefined)
+      this.config.strokeOffDms = off;
+    if (on !== undefined)
+      this.config.strokeOnDms = on;
+    this.configDirty = true;
+    return this;
   }
-}
 
-export class MomentarySolenoid extends Solenoid {
-  lastFired?: Clock;
-
-  constructor(
-    name: keyof CoilOutputs,
-    num: number,
-    board: SerialBoard,
-    public readonly ms = 25, // fire time
-    cfg?: Partial<CoilConfig>,
-    public wait = 1000, // min time between fire attempts
-    public fake?: () => void,
-  ) {
-    super(name, num, board, { strokeLength: ms, ...cfg });
+  hold(ms: number, off?: number, on?: number): this {
+    this.config.holdLength = ms;
+    if (off !== undefined)
+      this.config.holdOffDms = off;
+    if (on !== undefined)
+      this.config.holdOnDms = on;
+    this.configDirty = true;
+    return this;
   }
 
   async init() {
@@ -159,27 +160,34 @@ export class MomentarySolenoid extends Solenoid {
     //   Log.log(['mpu', 'solenoid'], 'skip initializing solenoid %s, no power', this.name);
     //   return;
     // }
-    Log.info(['machine', 'solenoid'], 'init %s as momentary, pulse %i', this.name, this.ms);
-    await this.updateConfig();
+    // Log.info(['machine', 'solenoid'], 'init %s as momentary, pulse %i', this.name, this.ms);
+    // await this.updateConfig();
   }
 
-  async fire(ms?: number): Promise<boolean> {
+  async fire(): Promise<boolean> {
     if (this.num < 0) return true;
-    // if (this.lastFired && time() < this.lastFired + this.wait) {
-    //   Log.trace(['machine', 'solenoid'], 'skip firing solenoid %s, too soon', this.name);
-    //   return this.lastFired + this.wait - time() + 3 + Math.floor(Math.random()*10);
-    // }
-    // if (Solenoid.firingUntil) {
-    //   if (time() <= Solenoid.firingUntil) {
-    //     Log.info(['machine', 'solenoid', 'console'], 'skip firing solenoid %s, global too soon', this.name);
-    //     return Solenoid.firingUntil - time() + Math.floor(Math.random()*10);
-    //   }
-    //   Solenoid.firingUntil = undefined;
-    // }
+    if (this.lastFired?.within(this.wait)) {
+      Log.trace(['machine', 'solenoid'], 'skip firing solenoid %s, too soon', this.name);
+      return false;
+    }
+    if (Coil.dontFireBefore.inFuture()) {
+      Log.info(['machine', 'solenoid', 'console'], 'skip firing solenoid %s, global too soon', this.name);
+      return false;
+    }
 
-    // this.lastFired = time();
-    // Solenoid.firingUntil = time() + (ms ?? this.ms)+100 + Math.floor(Math.random()*10) as Time;
-    Log.log(['machine', 'solenoid'], 'fire solenoid %s for %i', this.name, ms ?? this.ms);
+    if (this.configDirty) {
+      await this.updateConfig();
+      this.configDirty = false;
+    }
+
+    if (!this.config.holdLength && !this.config.strokeLength) {
+      Log.error('solenoid', 'solenoid %s has no time!', this.name);
+      return true;
+    }
+
+    this.lastFired = clock.stamp();
+    Coil.dontFireBefore.stamp(this.config.strokeLength + Math.floor(Math.random()*10) + 100);
+    Log.log(['machine', 'solenoid'], 'fire solenoid %s', this.name);
     // Events.fire(new SolenoidFireEvent(this));
 
     // if (!MPU.isLive && gfx && !curRecording && this.fake) void wait(100).then(() => this.fake!());
@@ -195,17 +203,36 @@ export class MomentarySolenoid extends Solenoid {
   }
 
   async set(on: boolean) {
-    if (on) return this.fire();
-    else if (this.config.holdLength === -1 || this.config.strokeLength === -1)
+    if (on) {
+      if (this.lastFired?.within(this.wait))
+        return false;
+      return this.fire();
+    }
+    else
       await this.turnOff();
 
     return true;
   }
 
   async turnOff() {
+    if (this.num < 0) return;
     const buf = Buffer.alloc(3);
     buf.write('OS');
     buf.writeUint8(this.num, 1);
+    await this.board.sendCommand(buf);
+  }
+
+  async updateConfig() {
+    if (this.num < 0) return;
+    const buf = Buffer.alloc(11);
+    buf.write('CS');
+    buf.writeUint8(this.num, 2);
+    buf.writeUInt16BE(this.config.strokeLength, 3);
+    buf.writeUint8(this.config.strokeOnDms, 5);
+    buf.writeUint8(this.config.strokeOffDms, 6);
+    buf.writeUInt16BE(this.config.holdLength, 7);
+    buf.writeUint8(this.config.holdOnDms, 9);
+    buf.writeUint8(this.config.holdOffDms, 10);
     await this.board.sendCommand(buf);
   }
 
@@ -219,7 +246,7 @@ export class MomentarySolenoid extends Solenoid {
 //   }
 // }
 
-export class IncreaseSolenoid extends MomentarySolenoid {
+export class IncreaseCoil extends Coil {
   i = 0;
   tries = 0;
 
@@ -227,56 +254,95 @@ export class IncreaseSolenoid extends MomentarySolenoid {
     name: keyof CoilOutputs,
     num: number,
     board: SerialBoard,
-    public initial: number,
-    public max: number,
+    public initial: number = 25,
+    public max: number = 50,
     public steps = 3,
     cfg?: Partial<CoilConfig>,
     wait?: number,
     public resetPeriod = 2000,
     fake?: () => void,
   ) {
-    super(name, num, board, initial, cfg, wait, fake);
+    super(name, num, board, cfg, wait as Clock, fake);
     assert(steps >= 2);
   }
 
   override async fire(): Promise<boolean> {
     let fired: boolean = false;
-    // if (!this.lastFired)
-    fired = await super.fire(this.initial);
-    // else {
-    //   if (time() > (this.lastFired + this.resetPeriod)) {
-    //     this.i = 0;
-    //     this.tries = 0;
-    //     fired = await super.fire(this.initial);
-    //   } else {
-    //     fired = await super.fire((this.max - this.initial)/(this.steps-1) * this.i + this.initial);
-    //   }
-    // } 
-    // if (fired) {
-    //   this.tries++;
-    //   if (this.tries > this.steps+3)
-    //   return true;
-    // }
-    // if (fired && this.i < this.steps - 1)
-    //   this.i++;
+    if (!this.lastFired) {
+      this.ms(this.initial);
+      fired = await super.fire();
+    }
+    else {
+      if (!this.lastFired.within(this.resetPeriod)) {
+        this.i = 0;
+        this.tries = 0;
+        this.ms(this.initial);
+        fired = await super.fire();
+      } else {
+        this.ms((this.max - this.initial)/(this.steps-1) * this.i + this.initial);
+        fired = await super.fire();
+      }
+    } 
+    if (fired) {
+      this.tries++;
+      if (this.tries > this.steps+3)
+        return true;
+    }
+    if (fired && this.i < this.steps - 1)
+      this.i++;
     return fired;
   }
 }
 
-export class TriggerSolenoid extends MomentarySolenoid {
+// export class CoilTrigger extends Output<boolean, CoilOutputs> {
+//   constructor(
+//     name: keyof CoilOutputs,
+//     public coil: Coil,
+//     public sw: Switch,
+//     public minOffDms = 1,
+//   ) {
+//     super(false, name);
+//   }
+
+//   override async set(enabled: boolean): Promise<boolean> {
+//     const buf = Buffer.alloc(12);
+//     buf.write('TS');
+//     buf.writeUint8(this.coil.num, 2);
+//     buf.writeUInt8(this.minOffDms, 11);
+//     if (enabled) {
+//       buf.writeUInt32BE(1 << this.sw.num, 3);
+//       // buf.writeUInt32BE(1 << this.sw.num, 7);
+//     }
+//     await this.coil.board.sendCommand(buf);
+//     return true;
+//   }
+
+//   override async init(): Promise<void> {
+      
+//   }
+// }
+
+export class TriggerCoil extends Coil {
   constructor(
     name: keyof CoilOutputs,
     num: number,
     board: SerialBoard,
     public sw: Switch,
-    ms = 25, // fire time
     public minOffDms = 1,
     cfg?: Partial<CoilConfig>,
-    wait = 1, // min time between fire attempts
-    fake?: () => void,
   ) {
-    super(name, num, board, ms, cfg, wait, fake);
+    super(name, num, board, cfg);
   }
+
+  // overrideasync init() {
+  //   if (this.num < 0) return;
+  //   // if (!machine.sDetect3.state) {
+  //   //   Log.log(['mpu', 'solenoid'], 'skip initializing solenoid %s, no power', this.name);
+  //   //   return;
+  //   // }
+  //   // Log.info(['machine', 'solenoid'], 'init %s as triggered, pulse %i', this.name, this.ms);
+  //   // await this.updateConfig();
+  // }
 
   override async set(enabled: boolean): Promise<boolean> {
     const buf = Buffer.alloc(12);
@@ -286,59 +352,14 @@ export class TriggerSolenoid extends MomentarySolenoid {
     if (enabled) {
       buf.writeUInt32BE(1 << this.sw.num, 3);
       // buf.writeUInt32BE(1 << this.sw.num, 7);
+      Log.info('solenoid', 'solenoid %s trigger enabled', this.name);
     }
+    else
+      Log.info('solenoid', 'solenoid %s trigger disabled', this.name);
     await this.board.sendCommand(buf);
     return true;
   }
 }
-
-// export class OnOffSolenoid extends Solenoid {
-//   constructor(
-//     name: keyof CoilOutputs,
-//     num: number,
-//     board: SerialBoard,
-//     public maxOnTime?: number,
-//     public pulseOffTime?: number,
-//     public pulseOnTime?: number,
-//     public fake?: (on: boolean) => void,
-//   ) {
-//     super(name, num, board);
-//   }
-//   async init() {
-//     if (!machine.sDetect3.state) {
-//       Log.log(['mpu', 'solenoid'], 'skip initializing solenoid %s, no power', this.name);
-//       return;
-//     }
-//     Log.info(['machine', 'solenoid'], 'init %s as on off, max %i %i', this.name, this.maxOnTime, this.pulseOffTime);
-//     await this.board.initOnOff(this.num, this.maxOnTime, this.pulseOffTime, this.pulseOnTime);
-//   }
-
-//   async set(on: boolean) {
-//     if (!MPU.isLive && gfx && !curRecording && this.fake) void wait(100).then(() => this.fake!(on));
-//     if (on) {
-//       if (Solenoid.firingUntil) {
-//         if (time() <= Solenoid.firingUntil) {
-//           Log.info(['machine', 'solenoid', 'console'], 'skip turning on solenoid %s, global too soon', this.name);
-//           return Solenoid.firingUntil - time() + 1;
-//         }
-//         Solenoid.firingUntil = undefined;
-//       }
-  
-//       Solenoid.firingUntil = time() + (this.pulseOffTime? this.maxOnTime! : 100)+0 as Time;
-//       Log.log(['machine', 'solenoid'], `turn ${this.name} ` + (on? 'on':'off'));
-//       await this.board.turnOnSolenoid(this.num);
-//     }
-//     else {
-//       Log.log(['machine', 'solenoid'], `turn ${this.name} ` + (on? 'on':'off'));
-//       await this.board.turnOffSolenoid(this.num);
-//     }
-//     return true;
-//   }
-
-//   async toggle() {
-//     return this.board.toggleSolenoid(this.num);
-//   }
-// }
 
 export class Light extends Output<LightState[], LightOutputs> {
   constructor(
@@ -393,6 +414,7 @@ export type CoilOutputs = {
   knocker: boolean;
   bell: boolean;
   reel: boolean;
+  enableKickers: boolean;
 };
 
 export type LightOutputs = {
@@ -439,6 +461,7 @@ const defaultOutputs: Outputs = {
   knocker: false,
   bell: false,
   reel: false,
+  enableKickers: false,
 };
 
 export class Machine {
@@ -452,6 +475,8 @@ export class Machine {
     this.node2,
     this.node3,
   ];
+
+  //#region switches
   sLeftFlipperSwitch = Switch.new(this.node1, 0);
   sRightPop = Switch.new(this.node1, 1);
   sRightFlipperSwitch = Switch.new(this.node1, 2);
@@ -548,51 +573,51 @@ export class Machine {
   sSkillshotBottomHole = Switch.new(this.node3, 19);
   sCaptiveBall3 = Switch.new(this.node3, 20);
   sLeftScoopExit = Switch.new(this.node3, 21);
-  // sRightScoop = Switch.new(SwitchBank.A, 0, { settled: 250 });
-
-  // override update(events: Event[], out: Partial<Outputs>): void {
-  // }
-
-  cLeftFlipperPower = new MomentarySolenoid('leftFlipperPower', 0, this.node1);
-  cLeftFlipperHold = new MomentarySolenoid('leftFlipperHold', 1, this.node1);
-  cRightPop = new MomentarySolenoid('rightPop', 2, this.node1);
-  cRightVuk = new MomentarySolenoid('rightVuk', 3, this.node1);
-  cRightScoop = new MomentarySolenoid('rightScoop', 4, this.node1);
-  cKickback = new MomentarySolenoid('kickback', 5, this.node1);
-  cUpperSling = new MomentarySolenoid('upperSling', 6, this.node1);
-  cRightFlipperPower = new MomentarySolenoid('rightFlipperPower', 8, this.node1);
-  cRightFlipperHold = new MomentarySolenoid('rightFlipperHold', 9, this.node1);
-  cRightSling = new MomentarySolenoid('rightSling', 10, this.node1);
-  cRightDropReset = new MomentarySolenoid('rightDropReset', 11, this.node1);
-  cTrough = new MomentarySolenoid('trough', 12, this.node1);
-  cLeftDropReset = new MomentarySolenoid('leftDropReset', 0, this.node2);
-  cLeftDrop1 = new MomentarySolenoid('leftDrop1', 1, this.node2);
-  cLeftDrop2 = new MomentarySolenoid('leftDrop2', 2, this.node2);
-  cLeftDrop3 = new MomentarySolenoid('leftDrop3', 3, this.node2);
-  cLeftDrop4 = new MomentarySolenoid('leftDrop4', 4, this.node2);
-  cLeftDrop5 = new MomentarySolenoid('leftDrop5', 5, this.node2);
-  cLeftDrop6 = new MomentarySolenoid('leftDrop6', 6, this.node2);
-  cUpperFlipperPower = new MomentarySolenoid('upperFlipperPower', 8, this.node2);
-  cUpperFlipperHold = new MomentarySolenoid('upperFlipperHold', 9, this.node2);
-  cLeftPop = new MomentarySolenoid('leftPop', 10, this.node2);
-  cLeftVuk = new MomentarySolenoid('leftVuk', 11, this.node2);
-  cLeftSling = new MomentarySolenoid('leftSling', 12, this.node2);
-  cSubwayDiverter = new MomentarySolenoid('subwayDiverter', 13, this.node2);
-  cMagnet = new MomentarySolenoid('magnet', 0, this.node3);
-  cLeftScoop = new MomentarySolenoid('leftScoop', 1, this.node3);
-  cFrontDrop1 = new MomentarySolenoid('frontDrop1', 2, this.node3);
-  cFrontDrop2 = new MomentarySolenoid('frontDrop2', 3, this.node3);
-  cBackDrop1 = new MomentarySolenoid('backDrop1', 4, this.node3);
-  cBackDrop2 = new MomentarySolenoid('backDrop2', 5, this.node3);
-  cBackDrop3 = new MomentarySolenoid('backDrop3', 6, this.node3);
-  cChime1 = new MomentarySolenoid('chime1', 8, this.node3);
-  cChime2 = new MomentarySolenoid('chime2', 9, this.node3);
-  cChime3 = new MomentarySolenoid('chime3', 10, this.node3);
-  cKnocker = new MomentarySolenoid('knocker', 11, this.node3);
-  cBell = new MomentarySolenoid('bell', 12, this.node3);
-  cReel = new MomentarySolenoid('reel', 13, this.node3);
+  //#endregion
+  //#region coils
+  cLeftFlipperPower = new TriggerCoil('leftFlipperPower', 0, this.node1, this.sLeftFlipperSwitch).hold(40);
+  cLeftFlipperHold = new TriggerCoil('leftFlipperHold', 1, this.node1, this.sLeftFlipperSwitch).hold(-1);
+  cRightPop = new TriggerCoil('rightPop', 2, this.node1, this.sRightPop).ms(25);
+  cRightVuk = new IncreaseCoil('rightVuk', 3, this.node1);
+  cRightScoop = new IncreaseCoil('rightScoop', 4, this.node1);
+  cKickback = new TriggerCoil('kickback', 5, this.node1, this.sKickback);
+  cUpperSling = new TriggerCoil('upperSling', 6, this.node1, this.sUpperSling);
+  cRightFlipperPower = new TriggerCoil('rightFlipperPower', 8, this.node1, this.sRightFlipperSwitch);
+  cRightFlipperHold = new TriggerCoil('rightFlipperHold', 9, this.node1, this.sRightFlipperSwitch);
+  cRightSling = new TriggerCoil('rightSling', 10, this.node1, this.sRightSling);
+  cRightDropReset = new IncreaseCoil('rightDropReset', 11, this.node1);
+  cTrough = new Coil('trough', 12, this.node1);
+  cLeftDropReset = new IncreaseCoil('leftDropReset', 0, this.node2).ms(50);
+  cLeftDrop1 = new IncreaseCoil('leftDrop1', 1, this.node2).ms(30);
+  cLeftDrop2 = new IncreaseCoil('leftDrop2', 2, this.node2).ms(30);
+  cLeftDrop3 = new IncreaseCoil('leftDrop3', 3, this.node2);
+  cLeftDrop4 = new IncreaseCoil('leftDrop4', 4, this.node2);
+  cLeftDrop5 = new IncreaseCoil('leftDrop5', 5, this.node2);
+  cLeftDrop6 = new IncreaseCoil('leftDrop6', 6, this.node2);
+  cUpperFlipperPower = new TriggerCoil('upperFlipperPower', 8, this.node2, this.sUpperFlipperSwitch);
+  cUpperFlipperHold = new TriggerCoil('upperFlipperHold', 9, this.node2, this.sUpperFlipperSwitch);
+  cLeftPop = new TriggerCoil('leftPop', 10, this.node2, this.sLeftPop);
+  cLeftVuk = new IncreaseCoil('leftVuk', 11, this.node2);
+  cLeftSling = new TriggerCoil('leftSling', 12, this.node2, this.sLeftSling);
+  cSubwayDiverter = new Coil('subwayDiverter', 13, this.node2);
+  cMagnet = new Coil('magnet', 0, this.node3).ms(50);
+  cLeftScoop = new IncreaseCoil('leftScoop', 1, this.node3).ms(50);
+  cFrontDrop1 = new IncreaseCoil('frontDrop1', 2, this.node3).ms(50);
+  cFrontDrop2 = new IncreaseCoil('frontDrop2', 3, this.node3);
+  cBackDrop1 = new IncreaseCoil('backDrop1', 4, this.node3);
+  cBackDrop2 = new IncreaseCoil('backDrop2', 5, this.node3);
+  cBackDrop3 = new IncreaseCoil('backDrop3', 6, this.node3);
+  cChime1 = new Coil('chime1', 8, this.node3);
+  cChime2 = new Coil('chime2', 9, this.node3);
+  cChime3 = new Coil('chime3', 10, this.node3);
+  cKnocker = new Coil('knocker', 11, this.node3);
+  cBell = new Coil('bell', 12, this.node3);
+  cReel = new Coil('reel', 13, this.node3);
+  //#endregion
 
   lTrail1 = new Light('lTrail1');
+
+  oEnableKickers = new VarOutput(false, "enableKickers");
 
   prevOutputState = {...defaultOutputs};
   outputState = {...defaultOutputs};
@@ -620,6 +645,13 @@ export class Machine {
     if (!this._lights)
       this._lights = Object.values(this).filter(s => s instanceof Light) as Light[];
     return this._lights!;
+  }
+
+  private _coils?: Coil[];
+  get coils(): Coil[] {
+    if (!this._coils)
+      this._coils = Object.values(this).filter(s => s instanceof Coil) as Coil[];
+    return this._coils!;
   }
 
   private _outputs?: {[name: string]: Output<any>};
@@ -651,20 +683,28 @@ export class Machine {
     this.root.loop(events);
     this.timers.filter(t => t.update(events, {}) === 'remove').forEach(t => this.timers.remove(t));
 
-    this.outputState = {...defaultOutputs, ...this.root.calcGlobalOutputs()};
-    for (const name of this.outputState.keys()) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-      const prev = (this.prevOutputState as any)[name];
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-      const cur = (this.outputState as any)[name];
-      if (!eq(prev, cur)) {
-        Log.info('machine', "%s changed to ", name, cur);
-        this.outputs[name].pending = cur;
+    {
+      const outputState = this.root.calcGlobalOutputs();
+      this.coils.filter(c => c instanceof TriggerCoil).forEach(c => {
+        outputState[c.name] ??= outputState.enableKickers;
+      });
+      this.outputState = {...defaultOutputs, ...outputState};
+
+      for (const name of this.outputState.keys()) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+        const prev = (this.prevOutputState as any)[name];
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+        const cur = (this.outputState as any)[name];
+        if (!eq(prev, cur)) {
+          Log.info('machine', "%s changed to ", name, cur);
+          this.outputs[name].pending = cur;
+        }
+      }
+      for (const out of Object.values(this.outputs)) {
+        out.update();
       }
     }
-    for (const out of Object.values(this.outputs)) {
-      out.loop();
-    }
+
     this.curFrame++;
   }
 }

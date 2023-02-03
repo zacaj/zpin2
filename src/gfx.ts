@@ -2,14 +2,14 @@ import { AminoGfx, AminoImage, Circle, fonts, Group, ImageView, Node, Polygon, P
 import * as fs from 'fs';
 import { Color, colorToHex, LightState, normalizeLight } from './light';
 import { Log } from './log';
-import { CoilOutputs, Light, LightOutputs, machine, resetMachine } from './machine';
+import { CoilOutputs, Light, LightOutputs, Machine, machine, resetMachine } from './machine';
 import { Mode } from './mode';
 import { assert, Dict, eq } from './util';
 import yargs from "yargs/yargs";
 import { Switch } from './switch';
 import { Event, Events, EventSource, SwitchEvent } from './event';
 import { clock, frame } from './time';
-import { Solenoid } from './machine';
+import { Coil } from './machine';
 const argv = yargs(process.argv.slice(2)).options({
   showPf: { type: 'boolean', default: false},
   split: { type: 'boolean', default: false},
@@ -101,13 +101,41 @@ const gfxCoils: { [name in keyof CoilOutputs]?: {
   c?: FxCoil;
 };} = {
   rightScoop: { x: 19.342499999999998, y: 23.5025 },
+  rightFlipperPower:  { x: 15.4325, y: 6.460000000000001 },
+  rightFlipperHold:  { x: 16.07, y:5.737500000000001 },
+  leftFlipperPower:  { x: 9.525, y: 6.672500000000003 },
+  leftFlipperHold:  { x: 9.0575, y: 5.907500000000002 },
+  upperFlipperPower:  { x: 2.3000000000000003, y: 19.805 },
+  upperFlipperHold:  { x: 1.5350000000000001, y: 19.295 },
+  rightSling:  { x: 17.345, y: 11.092500000000001 },
+  leftSling:  { x: 7.824999999999999, y: 11.177500000000002 },
+  rightPop:  { x: 15.985, y: 21.207500000000003 },
+  leftPop:  { x: 4.1275, y: 13.1325 },
+  kickback:  { x: 21.2125, y: 10.497500000000002 },
+  rightVuk:  { x: 19.895, y: 8.8825 },
+  leftVuk:  { x: 5.4025, y: 9.2225 },
+  leftScoop:  { x: 6.89, y: 31.0675 },
+  trough:  { x: 18.279999999999998, y: 3.145000000000003 },
+  rightDropReset:  { x: 21.68, y: 20.9525 },
+  leftDropReset:  { x: 5.6575, y: 24.6075 },
 };
-const gfxSwitches: { [name: string]: {
+type RemoveLeadingSAndLowercase<S extends string> = S extends `s${infer Name}`? Uncapitalize<Name> : never;
+const gfxSwitches: { [name in keyof Machine as RemoveLeadingSAndLowercase<name>]?: {
   x: number;
   y: number;
   s?: FxSwitch;
 };} = {
-  RightScoop: { x: 19.342499999999998, y: 22.567500000000003 },
+  rightScoop: { x: 19.342499999999998, y: 22.567500000000003 },
+  upperFlipperTarget:  { x: 3.5325, y: 16.872500000000002 },
+  leftScoop:  { x: 7.6125, y: 30.3875 },
+  centerCaptiveBall:  { x: 11.522499999999999, y: 28.73 },
+  popShot:  { x: 15.049999999999999, y: 18.8275 },
+  trough1:  { x: 17.685, y: 1.1475000000000009 },
+  trough2:  { x: 16.7075, y: 1.5300000000000011 },
+  trough3:  { x: 15.6025, y: 1.9550000000000054 },
+  trough4:  { x: 14.54, y: 2.3800000000000026 },
+  troughJam:  { x: 17.897499999999997, y: 2.167500000000004 },
+  spinner:  { x: 14.667499999999999, y: 29.240000000000002 },
 };
 
 
@@ -229,7 +257,7 @@ class FxSwitch extends Rect implements GfxNode {
     this.originX(0.5).originY(0.5);
     this.w(0.5).h(0.5);
 
-    const {x,y} = gfxSwitches[sw.name];
+    const {x,y} = gfxSwitches[sw.name as keyof typeof gfxSwitches]!;
     this.x(x).y(y);
 
     this.fill(sw.state? '#ff0000' : '#ffffff');
@@ -252,7 +280,7 @@ class FxSwitch extends Rect implements GfxNode {
 
 class FxCoil extends Rect implements GfxNode {
   constructor(
-    public coil: Solenoid,
+    public coil: Coil,
   ) {
     super(pfx!);
     assert(coil);
@@ -617,18 +645,18 @@ export class Playfield extends Group {
       this.add(gfxLights[name].l!);
     }
 
-    for (const name of Object.keys(gfxSwitches)) {
+    for (const name of Object.keys(gfxSwitches) as (keyof typeof gfxSwitches)[]) {
       const sw = machine.switches.find(s => s.name === name);
       if (!sw) {
         Log.error('gfx', 'no switch found for %s', name);
         continue;
       }
-      gfxSwitches[name].s = new FxSwitch(sw);
-      this.add(gfxSwitches[name].s!);
+      gfxSwitches[name]!.s = new FxSwitch(sw);
+      this.add(gfxSwitches[name]!.s!);
     }
 
     for (const name of Object.keys(gfxCoils) as (keyof typeof gfxCoils)[]) {
-      const coil = Object.values(machine).find(v => v instanceof Solenoid && v.name === name);
+      const coil = Object.values(machine).find(v => v instanceof Coil && v.name === name);
       if (!coil) {
         Log.error('gfx', 'no coil found for %s', name);
         continue;

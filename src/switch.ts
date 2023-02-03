@@ -29,8 +29,11 @@ export class Switch {
 
   private _name?: string;
   get name(): string {
-    if (!this._name)
+    if (!this._name) {
       this._name = Object.entries(machine).find(([k, s]) => s===this)![0].slice(1);
+      this._name = this.name.slice(0,1).toLowerCase() + this.name.slice(1);
+    }
+    
     return this._name;
   }
 

@@ -2,13 +2,13 @@ import { DelimiterParser, SerialPort } from "serialport";
 import { BoardBootEvent, Event, Events, EventSource, SwitchEvent } from "./event";
 import { Log } from "./log";
 import { Init, machine } from "./machine";
-import { Solenoid } from "./machine";
+import { Coil } from "./machine";
 import { Switch } from "./switch";
 import { Clock } from "./time";
 
 
 export class Board extends EventSource implements Init {
-  coils: Solenoid[] = [];
+  coils: Coil[] = [];
   switches: Switch[] = [];
   isConnected = false;
 

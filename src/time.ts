@@ -8,18 +8,18 @@ type Time<T extends number> = (() => T) & {
   startTime: T;
   getTime: () => number;
   wait(val: number, context?: string): Promise<void>;
-  stamp(): Timestamp<T>;
+  stamp(futureMs?: number): Timestamp<T>;
 };
 
 function wait<T extends number>(this: Time<T>, val: number, context?: string): Promise<void> {
-  return new Promise(resolve => new Timer(this, context, val, () => resolve()));
+  return new Promise(resolve => machine.timers.push(new Timer(this, context, val, () => resolve())));
 }
 
-function stamp<T extends number>(this: Time<T>): Timestamp<T> {
-  return new Timestamp(this);
+function stamp<T extends number>(this: Time<T>, futureMs?: number): Timestamp<T> {
+  return new Timestamp(this, futureMs? this()+futureMs as T : undefined);
 }
 
-export function makeTime<T extends number>(getTime: () => number, startTime: T = 0 as T): Time<T> {
+function makeTime<T extends number>(getTime: () => number, startTime: T = 0 as T): Time<T> {
   const time: Time<T> = function(this: Time<T>) {
     return time.mockTime ?? (time.getTime() - time.startTime) as T;
   };
@@ -76,8 +76,8 @@ export class Timestamp<T extends number> {
   ) {
   }
 
-  stamp() {
-    this.last = this.time();
+  stamp(futureMs?: number) {
+    this.last = this.time() + (futureMs ?? 0) as T;
   }
 
   get age(): number {
@@ -86,5 +86,19 @@ export class Timestamp<T extends number> {
 
   get now(): boolean {
     return this.last === this.time();
+  }
+
+  inFuture(): boolean {
+    return this.time() < this.last;
+  }
+
+  before(t: T|Timestamp<T>): boolean {
+    if (t instanceof Timestamp)
+      t = t.last;
+    return this.last < t;
+  }
+
+  within(t: T|number): boolean {
+    return this.time() - this.last <= t;
   }
 }

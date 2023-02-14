@@ -4,7 +4,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 import * as fs from 'fs';
 import * as util from 'util';
+import { frame } from './time';
 import { OrArray, arrayify, getCallerLoc, clone } from './util';
+const argv = require('yargs').argv;
 // const truncate = require('truncate-logs');
 
 enum Levels {
@@ -46,8 +48,8 @@ export class Log {
     const hr = process.hrtime();
     const d = new Date(hr[0]*1000);
     const ms = (hr[1]).toFixed(0).padStart(9, '0');
-    return d.getMinutes().toFixed().padStart(2, '0')+':'+d.getSeconds().toFixed().padStart(2, '0')+
-    '.'/*+d.getMilliseconds().toFixed().padStart(3, '0')*/+ms.slice(0, 3)+'.'+ms.slice(6);
+    return frame().toFixed(0).slice(-2)+'|'+d.getMinutes().toFixed().padStart(2, '0')+':'+d.getSeconds().toFixed().padStart(2, '0')+
+    '.'/*+d.getMilliseconds().toFixed().padStart(3, '0')*/+ms.slice(0, 3)+'.'+ms.slice(6, 7);
   }
   
   static cleanParams(params: any[], maxDepth = 2): any[] {
@@ -74,8 +76,8 @@ export class Log {
   static logMessage(level: Levels, categories: OrArray<LogCategory>, message: string, ...params: any[]) {
     params = Log.cleanParams(params);
     // Log.write(Log.files.all, JSON.stringify({level, categories, message, params: util.inspect(params)}));
-    const ts = Log.timestamp()+' '+(level >= Levels.Error? 'ERR ': '');
-    // if (categories.includes('switch') || categories.includes('game') || level >= Levels.Log)
+    const ts = Log.timestamp()+' '+(level >= Levels.Error? 'ERR ': level < Levels.Log? '  ' : '');
+    if (categories.includes('switch') || categories.includes('game') || level >= Levels.Log)
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
       console[level >= Levels.Error? 'error' : 'log'](ts+message, ...params);
     Log.write(Log.files.all, ts+Log.format(message, params)+'; \t\t'+JSON.stringify(categories)+' ');
@@ -113,10 +115,13 @@ export class Log {
   }
   
   static write(fil: number, message: string) {
+    if (!fil) return;
     fs.writeSync(fil, message+'\n');
+    // fs.write(fil, message+'\n', err => err && console.error('log write error ', err));
   }
   
-  static init(trace = true, append = false) {
+  static init(trace = true, append = false, logFiles = true) {
+    if (!logFiles) return;
     for (const f of files) {
       Log.files[f] = fs.openSync(f+'.log', append? 'a+' : 'w');
       Log.write(Log.files[f], `${new Date()}`);

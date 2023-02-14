@@ -8,7 +8,7 @@ import { Log } from "./log";
 import { MPU } from "./mpu";
 import { Node } from "./node";
 import { Switch } from "./switch";
-import { Clock, frame, Timer, clock, Timestamp } from "./time";
+import { Clock, frame, Timer, clock, Instant } from "./time";
 import { assert, eq, id, Obj, objectFilter, objectFilterMap, objectMap, then } from "./util";
 
 export interface Init {
@@ -21,7 +21,8 @@ export abstract class Output<T, Outs = Outputs> implements Init {
   pending!: T;
   // lastActualChange = frame();
   // lastPendingChange = frame();
-  lastActualChange = frame.stamp();
+  lastActualChange = Instant.now();
+  tryStartedAt?: Instant;
 
   constructor(
     public actual: T,
@@ -32,6 +33,7 @@ export abstract class Output<T, Outs = Outputs> implements Init {
 
   trySet(): Promise<void>|void {
     // this.pending = val;
+    if (this.tryStartedAt) return;
     if (eq(this.pending, this.actual)) {
       return;
     }
@@ -39,7 +41,8 @@ export abstract class Output<T, Outs = Outputs> implements Init {
     //   this.timer = Timer.callIn(() => this.trySet(), 100, `delayed no-power retry set ${this.name} to ${this.val}`);
     //   return undefined;
     // }
-    Log[this instanceof Coil? 'log':'trace'](['machine'], 'try set %s to ', this.name, this.pending);
+    Log[this instanceof Coil? 'info':'trace'](['machine'], 'try set %s to ', this.name, this.pending);
+    this.tryStartedAt = Instant.now();
     return then(this.set(this.pending), success => {
       // try {
       if (success instanceof Error) {
@@ -51,7 +54,7 @@ export abstract class Output<T, Outs = Outputs> implements Init {
         this.lastActualChange.stamp();
       } else {
         // if (!success) {
-        Log.log('machine', 'failed to %s set to ', this.name, this.pending);
+        Log.log('machine', 'failed to %s set to %s, will retry', this.name, this.pending);
         // success = 5;
         // } else 
         //   Log.info('machine', 'will retry %s set to ', this.name, this.pending);
@@ -64,16 +67,22 @@ export abstract class Output<T, Outs = Outputs> implements Init {
       //   // if (!this.timer)
       //   //   this.timer = Timer.callIn(() => this.trySet(), 5, `delayed retry set ${this.name} to ${this.val}`);
       // }
+      this.tryStartedAt = undefined;
     });
   }
 
   update() {
+    if (this.disabled) return;
     void this.trySet();
   }
 
   abstract init(): Promise<void>;
 
   abstract set(val: T): Promise<boolean>|boolean;
+
+  get disabled(): boolean {
+    return false;
+  }
 }
 class VarOutput<T> extends Output<T> {
   override async init() {}
@@ -108,10 +117,11 @@ export type CoilConfig = {
 };
 
 export class Coil extends Output<boolean, CoilOutputs> {
-  static dontFireBefore = clock.stamp();
-  private config!: CoilConfig;
-  lastFired?: Timestamp<Clock>;
-  private configDirty = true;
+  static dontFireBefore = Instant.now();
+  protected config!: CoilConfig;
+  lastFired?: Instant;
+  protected configDirty = true;
+  static MaxLen = 0xFFFF;
 
   constructor(
     name: keyof CoilOutputs,
@@ -132,6 +142,8 @@ export class Coil extends Output<boolean, CoilOutputs> {
       strokeOnDms: 10,
       ...cfg,
     };
+
+    this.board.coils.push(this);
   }
 
   ms(ms: number, off?: number, on?: number): this {
@@ -156,6 +168,7 @@ export class Coil extends Output<boolean, CoilOutputs> {
 
   async init() {
     if (this.num < 0) return;
+    this.configDirty = true;
     // if (!machine.sDetect3.state) {
     //   Log.log(['mpu', 'solenoid'], 'skip initializing solenoid %s, no power', this.name);
     //   return;
@@ -164,29 +177,27 @@ export class Coil extends Output<boolean, CoilOutputs> {
     // await this.updateConfig();
   }
 
-  async fire(): Promise<boolean> {
+  fire(): boolean {
     if (this.num < 0) return true;
-    if (this.lastFired?.within(this.wait)) {
+    if (this.lastFired?.wasWithin(this.wait, clock)) {
       Log.trace(['machine', 'solenoid'], 'skip firing solenoid %s, too soon', this.name);
       return false;
     }
-    if (Coil.dontFireBefore.inFuture()) {
+    if (Coil.dontFireBefore.inFuture(clock)) {
       Log.info(['machine', 'solenoid', 'console'], 'skip firing solenoid %s, global too soon', this.name);
       return false;
     }
 
-    if (this.configDirty) {
-      await this.updateConfig();
-      this.configDirty = false;
-    }
+    if (this.configDirty)
+      this.updateConfig();
 
     if (!this.config.holdLength && !this.config.strokeLength) {
       Log.error('solenoid', 'solenoid %s has no time!', this.name);
       return true;
     }
 
-    this.lastFired = clock.stamp();
-    Coil.dontFireBefore.stamp(this.config.strokeLength + Math.floor(Math.random()*10) + 100);
+    this.lastFired = Instant.now();
+    Coil.dontFireBefore.set(this.config.strokeLength + Math.floor(Math.random()*10) + 100, clock);
     Log.log(['machine', 'solenoid'], 'fire solenoid %s', this.name);
     // Events.fire(new SolenoidFireEvent(this));
 
@@ -195,34 +206,34 @@ export class Coil extends Output<boolean, CoilOutputs> {
       const buf = Buffer.alloc(3);
       buf.write('CS');
       buf.writeUint8(this.num, 1);
-      await this.board.sendCommand(buf);
+      this.board.sendCommand(buf);
     }
 
     // return (ms ?? this.ms) + this.wait + 3 + Math.floor(Math.random()*10);
     return true;
   }
 
-  async set(on: boolean) {
+  set(on: boolean) {
     if (on) {
-      if (this.lastFired?.within(this.wait))
+      if (this.lastFired?.wasWithin(this.wait, clock))
         return false;
       return this.fire();
     }
     else
-      await this.turnOff();
+      this.turnOff();
 
     return true;
   }
 
-  async turnOff() {
+  turnOff() {
     if (this.num < 0) return;
     const buf = Buffer.alloc(3);
     buf.write('OS');
     buf.writeUint8(this.num, 1);
-    await this.board.sendCommand(buf);
+    this.board.sendCommand(buf);
   }
 
-  async updateConfig() {
+  updateConfig() {
     if (this.num < 0) return;
     const buf = Buffer.alloc(11);
     buf.write('CS');
@@ -233,7 +244,12 @@ export class Coil extends Output<boolean, CoilOutputs> {
     buf.writeUInt16BE(this.config.holdLength, 7);
     buf.writeUint8(this.config.holdOnDms, 9);
     buf.writeUint8(this.config.holdOffDms, 10);
-    await this.board.sendCommand(buf);
+    this.board.sendCommand(buf);
+    this.configDirty = false;
+  }
+
+  override get disabled(): boolean {
+    return !this.board.isConnected;
   }
 
   // onFire = (e: Event) => e instanceof SolenoidFireEvent && e.coil === this;
@@ -266,21 +282,21 @@ export class IncreaseCoil extends Coil {
     assert(steps >= 2);
   }
 
-  override async fire(): Promise<boolean> {
+  override fire(): boolean {
     let fired: boolean = false;
     if (!this.lastFired) {
       this.ms(this.initial);
-      fired = await super.fire();
+      fired = super.fire();
     }
     else {
-      if (!this.lastFired.within(this.resetPeriod)) {
+      if (!this.lastFired.wasWithin(this.resetPeriod, clock)) {
         this.i = 0;
         this.tries = 0;
         this.ms(this.initial);
-        fired = await super.fire();
+        fired = super.fire();
       } else {
         this.ms((this.max - this.initial)/(this.steps-1) * this.i + this.initial);
-        fired = await super.fire();
+        fired = super.fire();
       }
     } 
     if (fired) {
@@ -342,9 +358,13 @@ export class TriggerCoil extends Coil {
   //   // }
   //   // Log.info(['machine', 'solenoid'], 'init %s as triggered, pulse %i', this.name, this.ms);
   //   // await this.updateConfig();
+  //   await this.set(this.actual)
   // }
 
-  override async set(enabled: boolean): Promise<boolean> {
+  override set(enabled: boolean): boolean {
+    if (this.configDirty)
+      this.updateConfig();
+
     const buf = Buffer.alloc(12);
     buf.write('TS');
     buf.writeUint8(this.num, 2);
@@ -356,7 +376,7 @@ export class TriggerCoil extends Coil {
     }
     else
       Log.info('solenoid', 'solenoid %s trigger disabled', this.name);
-    await this.board.sendCommand(buf);
+    this.board.sendCommand(buf);
     return true;
   }
 }
@@ -465,50 +485,53 @@ const defaultOutputs: Outputs = {
 };
 
 export class Machine {
-  node1 = new SerialBoard("/dev/ttyAMA0");
+  node1 = new SerialBoard("/dev/ttyAMA1");
+  // node1 = new SerialBoard("/dev/ttyAMA0");
   node2 = new SerialBoard("/dev/ttyAMA1");
   node3 = new SerialBoard("/dev/ttyAMA2");
+  node4 = new SerialBoard("/dev/ttyAMA3");
   mpu = new MPU();
   boards: Board[] = [
     this.mpu,
     this.node1,
-    this.node2,
-    this.node3,
+    // this.node2,
+    // this.node3,
+    // this.node4,
   ];
 
   //#region switches
   sLeftFlipperSwitch = Switch.new(this.node1, 0);
   sRightPop = Switch.new(this.node1, 1);
   sRightFlipperSwitch = Switch.new(this.node1, 2);
-  sKickback = Switch.new(this.node1, 3);
+  sBehindRightDropsTarget = Switch.new(this.node1, 3);
   sUpperSling = Switch.new(this.node1, 4);
   sRightSling = Switch.new(this.node1, 5);
   sLeftFlipperEos = Switch.new(this.node1, 6);
   sRightFlipperEos = Switch.new(this.node1, 7);
   sRightVuk = Switch.new(this.node1, 8);
   sRightVukJam = Switch.new(this.node1, 9);
-  sRightLock1 = Switch.new(this.node1, 0);
-  sRightLock2 = Switch.new(this.node1, 1);
-  sRightScoop = Switch.new(this.node1, 2, { settled: 500 });
-  sRightScoopJam = Switch.new(this.node1, 3);
-  sRightScoopEntry = Switch.new(this.node1, 4);
-  sRightScoopExit = Switch.new(this.node1, 5);
+  sRightLock1 = Switch.new(this.node1, 10);
+  sRightLock2 = Switch.new(this.node1, 11);
+  sRightScoop = Switch.new(this.node1, 12, {settled: 500});
+  sRightScoopJam = Switch.new(this.node1, 13);
+  sRightScoopEntry = Switch.new(this.node1, 14);
+  sRightScoopExit = Switch.new(this.node1, 15);
   sShooterLane = Switch.new(this.node1, 16);
   sSkillshotUpper = Switch.new(this.node1, 17);
   sSkillshotLower = Switch.new(this.node1, 18);
   sRightOutlane = Switch.new(this.node1, 19);
-  sBehindRightDropsTarget = Switch.new(this.node1, 20);
+  sKickback = Switch.new(this.node1, 20).invert();
   sRightDrop1 = Switch.new(this.node1, 21);
   sRightDrop2 = Switch.new(this.node1, 22);
   sRightDrop3 = Switch.new(this.node1, 23);
   sTrough1 = Switch.new(this.node1, 24);
   sTrough2 = Switch.new(this.node1, 25);
-  sTrough3 = Switch.new(this.node1, 16);
-  sTrough4 = Switch.new(this.node1, 17);
-  sTroughJam = Switch.new(this.node1, 18);
-  sRightInlaneTop = Switch.new(this.node1, 19);
-  sRightInlaneMiddle = Switch.new(this.node1, 20);
-  sRightInlaneBottom = Switch.new(this.node1, 21);
+  sTrough3 = Switch.new(this.node1, 26);
+  sTrough4 = Switch.new(this.node1, 27);
+  sTroughJam = Switch.new(this.node1, 28);
+  sRightInlaneTop = Switch.new(this.node1, 29);
+  sRightInlaneMiddle = Switch.new(this.node1, 30);
+  sRightInlaneBottom = Switch.new(this.node1, 31);
   sUpperFlipperSwitch = Switch.new(this.node2, 0);
   sLeftPop = Switch.new(this.node2, 1);
   sLeftSling = Switch.new(this.node2, 2);
@@ -519,12 +542,12 @@ export class Machine {
   sRollover3 = Switch.new(this.node2, 7);
   sLeftVuk = Switch.new(this.node2, 8);
   sLeftVukJam = Switch.new(this.node2, 9);
-  sLeftLock1 = Switch.new(this.node2, 0);
-  sLeftLock2 = Switch.new(this.node2, 1);
-  sDiverterExitLeft = Switch.new(this.node2, 2);
-  sDiverterExitRight = Switch.new(this.node2, 3);
-  sSideHoleEntry = Switch.new(this.node2, 4);
-  sLeftOutlane = Switch.new(this.node2, 5);
+  sLeftLock1 = Switch.new(this.node2, 10);
+  sLeftLock2 = Switch.new(this.node2, 11);
+  sDiverterExitLeft = Switch.new(this.node2, 12);
+  sDiverterExitRight = Switch.new(this.node2, 13);
+  sSideHoleEntry = Switch.new(this.node2, 14);
+  sLeftOutlane = Switch.new(this.node2, 15);
   sLeftDrop1 = Switch.new(this.node2, 16);
   sLeftDrop2 = Switch.new(this.node2, 17);
   sLeftDrop3 = Switch.new(this.node2, 18);
@@ -535,12 +558,12 @@ export class Machine {
   sLeftBonusTarget = Switch.new(this.node2, 23);
   sRollover4 = Switch.new(this.node2, 24);
   sRollover5 = Switch.new(this.node2, 25);
-  sRollover6 = Switch.new(this.node2, 16);
-  sRollover7 = Switch.new(this.node2, 17);
-  sRollover8 = Switch.new(this.node2, 18);
-  sLeftInlaneTop = Switch.new(this.node2, 19);
-  sLeftInlaneMiddle = Switch.new(this.node2, 20);
-  sLeftInlaneBottom = Switch.new(this.node2, 21);
+  sRollover6 = Switch.new(this.node2, 26);
+  sRollover7 = Switch.new(this.node2, 27);
+  sRollover8 = Switch.new(this.node2, 28);
+  sLeftInlaneTop = Switch.new(this.node2, 29);
+  sLeftInlaneMiddle = Switch.new(this.node2, 30);
+  sLeftInlaneBottom = Switch.new(this.node2, 31);
   sLeftScoop = Switch.new(this.node3, 0);
   sLeftScoopJam = Switch.new(this.node3, 1);
   sLeftScoopEntry = Switch.new(this.node3, 2);
@@ -551,12 +574,12 @@ export class Machine {
   sCaptiveTarget = Switch.new(this.node3, 7);
   sCenterTarget1 = Switch.new(this.node3, 8);
   sCenterTarget2 = Switch.new(this.node3, 9);
-  sCenterTarget3 = Switch.new(this.node3, 0);
-  sCenterTarget4 = Switch.new(this.node3, 1);
-  sCenterTarget5 = Switch.new(this.node3, 2);
-  sLeftScoopRightTarget = Switch.new(this.node3, 3);
-  sCenterCaptiveBall = Switch.new(this.node3, 4);
-  sLeftScoopLeftTarget = Switch.new(this.node3, 5);
+  sCenterTarget3 = Switch.new(this.node3, 10);
+  sCenterTarget4 = Switch.new(this.node3, 11);
+  sCenterTarget5 = Switch.new(this.node3, 12);
+  sLeftScoopRightTarget = Switch.new(this.node3, 13);
+  sCenterCaptiveBall = Switch.new(this.node3, 14);
+  sLeftScoopLeftTarget = Switch.new(this.node3, 15);
   sFrontDrop1 = Switch.new(this.node3, 16);
   sFrontDrop2 = Switch.new(this.node3, 17);
   sBackDrop1 = Switch.new(this.node3, 18);
@@ -567,26 +590,26 @@ export class Machine {
   sTilt2 = Switch.new(this.node3, 23);
   sSideScoop1 = Switch.new(this.node3, 24);
   sSideScoop2 = Switch.new(this.node3, 25);
-  sSideScoop3 = Switch.new(this.node3, 16);
-  sSkillshotLeftHole = Switch.new(this.node3, 17);
-  sSkillshotRightHole = Switch.new(this.node3, 18);
-  sSkillshotBottomHole = Switch.new(this.node3, 19);
-  sCaptiveBall3 = Switch.new(this.node3, 20);
-  sLeftScoopExit = Switch.new(this.node3, 21);
+  sSideScoop3 = Switch.new(this.node3, 26);
+  sSkillshotLeftHole = Switch.new(this.node3, 27);
+  sSkillshotRightHole = Switch.new(this.node3, 28);
+  sSkillshotBottomHole = Switch.new(this.node3, 29);
+  sCaptiveBall3 = Switch.new(this.node3, 30);
+  sLeftScoopExit = Switch.new(this.node3, 31);
   //#endregion
   //#region coils
-  cLeftFlipperPower = new TriggerCoil('leftFlipperPower', 0, this.node1, this.sLeftFlipperSwitch).hold(40);
-  cLeftFlipperHold = new TriggerCoil('leftFlipperHold', 1, this.node1, this.sLeftFlipperSwitch).hold(-1);
-  cRightPop = new TriggerCoil('rightPop', 2, this.node1, this.sRightPop).ms(25);
-  cRightVuk = new IncreaseCoil('rightVuk', 3, this.node1);
-  cRightScoop = new IncreaseCoil('rightScoop', 4, this.node1);
-  cKickback = new TriggerCoil('kickback', 5, this.node1, this.sKickback);
-  cUpperSling = new TriggerCoil('upperSling', 6, this.node1, this.sUpperSling);
-  cRightFlipperPower = new TriggerCoil('rightFlipperPower', 8, this.node1, this.sRightFlipperSwitch);
-  cRightFlipperHold = new TriggerCoil('rightFlipperHold', 9, this.node1, this.sRightFlipperSwitch);
-  cRightSling = new TriggerCoil('rightSling', 10, this.node1, this.sRightSling);
-  cRightDropReset = new IncreaseCoil('rightDropReset', 11, this.node1);
-  cTrough = new Coil('trough', 12, this.node1);
+  cLeftFlipperPower = new TriggerCoil('leftFlipperPower', 0, this.node1, this.sLeftFlipperSwitch).ms(12).hold(30);
+  cLeftFlipperHold = new TriggerCoil('leftFlipperHold', 1, this.node1, this.sLeftFlipperSwitch).ms(12).hold(Coil.MaxLen);
+  cRightPop = new TriggerCoil('rightPop', 2, this.node1, this.sRightPop).ms(40);
+  cRightVuk = new IncreaseCoil('rightVuk', 3, this.node1).ms(40);
+  cRightScoop = new IncreaseCoil('rightScoop', 4, this.node1).ms(40);
+  cKickback = new TriggerCoil('kickback', 5, this.node1, this.sKickback).ms(40);
+  cUpperSling = new TriggerCoil('upperSling', 6, this.node1, this.sUpperSling).ms(40);
+  cRightFlipperPower = new TriggerCoil('rightFlipperPower', 8, this.node1, this.sRightFlipperSwitch).ms(12).hold(30);
+  cRightFlipperHold = new TriggerCoil('rightFlipperHold', 9, this.node1, this.sRightFlipperSwitch).ms(12).hold(Coil.MaxLen);
+  cRightSling = new TriggerCoil('rightSling', 10, this.node1, this.sRightSling).ms(40);
+  cRightDropReset = new IncreaseCoil('rightDropReset', 11, this.node1).ms(40);
+  cTrough = new Coil('trough', 12, this.node1).ms(40);
   cLeftDropReset = new IncreaseCoil('leftDropReset', 0, this.node2).ms(50);
   cLeftDrop1 = new IncreaseCoil('leftDrop1', 1, this.node2).ms(30);
   cLeftDrop2 = new IncreaseCoil('leftDrop2', 2, this.node2).ms(30);
@@ -630,7 +653,7 @@ export class Machine {
   }
 
   async init() {
-    await Promise.all([...this.boards, ...Object.values(this.outputs)].map(x => x.init()));
+    await Promise.all([...this.boards].map(x => x.init()));
   }
 
   private _switches?: Switch[];
@@ -675,8 +698,9 @@ export class Machine {
         sw.update();
       }
       for (const ev of events) {
-        if (ev instanceof SwitchEvent)
-          ev.sw.rawState = ev.state;          
+        if (ev instanceof SwitchEvent) {
+          ev.sw.onEvent(ev);
+        }      
       }
     }
 
@@ -696,7 +720,7 @@ export class Machine {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         const cur = (this.outputState as any)[name];
         if (!eq(prev, cur)) {
-          Log.info('machine', "%s changed to ", name, cur);
+          Log.info('machine', "%s changed to %s" + (this.outputs[name].disabled? ", but output is disabled" : ""), name, cur);
           this.outputs[name].pending = cur;
         }
       }

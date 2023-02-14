@@ -8,7 +8,7 @@ type Time<T extends number> = (() => T) & {
   startTime: T;
   getTime: () => number;
   wait(val: number, context?: string): Promise<void>;
-  stamp(futureMs?: number): Timestamp<T>;
+  // stamp(futureMs?: number): Timestamp<T>;
 };
 
 function wait<T extends number>(this: Time<T>, val: number, context?: string): Promise<void> {
@@ -26,7 +26,7 @@ function makeTime<T extends number>(getTime: () => number, startTime: T = 0 as T
   time.startTime = startTime;
   time.getTime = getTime;
   time.wait = wait;
-  time.stamp = stamp;
+  // time.stamp = stamp;
   return time;
 }
 
@@ -37,8 +37,11 @@ export type PlayTime = Opaque<number, 'PlayTime'>;
 export const playtime = makeTime<PlayTime>(() => new Date().getTime());
 
 export type Frame = Opaque<number, 'Frame'>;
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
 export const frame = makeTime<Frame>(() => machine?.curFrame ?? 0 as Frame);
 
+const times = [clock, playtime, frame];
+type Times = ReturnType<(typeof times[number])>;
 
 export class Timer<T extends number> extends Node {
   constructor(
@@ -69,15 +72,19 @@ export class Timer<T extends number> extends Node {
   }
 }
 
-export class Timestamp<T extends number> {
+class Timestamp<T extends number> {
   constructor(
     public time: Time<T>,
     public last = time(),
   ) {
   }
 
-  stamp(futureMs?: number) {
-    this.last = this.time() + (futureMs ?? 0) as T;
+  stamp(offsetIntoFuture?: number) {
+    this.last = this.time() + (offsetIntoFuture ?? 0) as T;
+  }
+
+  set(time: number) {
+    this.last = time as T;
   }
 
   get age(): number {
@@ -98,7 +105,76 @@ export class Timestamp<T extends number> {
     return this.last < t;
   }
 
-  within(t: T|number): boolean {
-    return this.time() - this.last <= t;
+  wasWithin(t: T|number): boolean {
+    return ((this.time() - this.last)|0) <= t;
+  }
+
+  notWithin(t: T|number): boolean {
+    return !this.wasWithin(t);
+  }
+}
+
+export class Instant {
+  when = new Map<typeof times[number], Timestamp<Times>>();
+  constructor(...overrides: [Time<any>, number][]) {
+    this.stamp();
+    for (const [t, n] of overrides)
+      this.set(n, t);
+  }
+
+  age(time: Time<any>): number {
+    return this.when.get(time)!.age;
+  }
+
+  now(time: Time<any>): boolean {
+    return this.when.get(time)!.now;
+  }
+
+  inFuture(time: Time<any>): boolean {
+    return this.when.get(time)!.inFuture();
+  }
+
+  before<T extends Times>(t: T|Timestamp<T>, time?: Time<T>): boolean {
+    if (time)
+      return this.when.get(time as Time<any>)!.before(t);
+    else if (t instanceof Timestamp)
+      return this.when.get(t.time as Time<any>)!.before(t);
+    else
+      throw new Error("T needs a time");
+  }
+
+  wasWithin<T extends Times>(t: T|number, time: Time<any>): boolean {
+    return this.when.get(time as Time<any>)!.wasWithin(t);
+  }
+
+  notWithin<T extends Times>(t: T|number, time: Time<any>): boolean {
+    return this.when.get(time as Time<any>)!.notWithin(t);
+  }
+
+  static now(...overrides: [Time<any>, number][]) {
+    return new Instant(...overrides);
+  }
+
+  stamp(): this {
+    for (const time of times)
+      this.when.set(time, new Timestamp(time as any));
+    return this;
+  }
+
+  set(when: number, time = clock) {
+    this.when.get(time)!.set(when);
+  }
+
+  get(time = clock) {
+    return this.when.get(time)!.last;
+  }
+
+  get clock(): Clock {
+    return this.when.get(clock)!.last as Clock;
+  }
+
+  copy(i: Instant) {
+    for (const [time] of this.when.entries())
+      this.when.get(time)!.set(i.get(time as any));
   }
 }

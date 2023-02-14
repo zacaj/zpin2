@@ -1,8 +1,9 @@
 import { DelimiterParser, SerialPort } from "serialport";
+import { BoardTime } from "./board";
 import { Log } from "./log";
 import { machine } from "./machine";
 import { Switch } from "./switch";
-import { clock } from "./time";
+import { Clock, clock, Instant } from "./time";
 
 export class EventSource {
 
@@ -10,12 +11,12 @@ export class EventSource {
 
 export class Event {
   static eventCount = 0;
-  num = ++Event.eventCount;
+  _num = ++Event.eventCount;
 
   constructor(
     public source: EventSource,
     public rawData: any,
-    public when = clock(),
+    public when = Instant.now(),
   ) {
       
   }
@@ -27,7 +28,7 @@ export class Event {
   static new(
     source: EventSource,
     rawData: any,
-    when = clock(),
+    when?: Instant,
   ): Event {
     return new Event(source, rawData, when);
   }
@@ -49,6 +50,7 @@ export class Events {
   static getPending(): Event[] {
     const p = this.pending;
     this.pending = [];
+    // p.sort((a, b) => a.when - b.when);
     return p;
   }
 }
@@ -70,10 +72,12 @@ export class SwitchEvent extends Event {
   constructor(
     public sw: Switch,
     public state: boolean,
+    public remoteWhen: BoardTime,
     source: EventSource,
     rawData: any,
+    when?: Instant,
   ) {
-    super(source, rawData);
+    super(source, rawData, when);
   }
 }
 

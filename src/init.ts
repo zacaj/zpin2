@@ -24,7 +24,7 @@ export async function initMachine(live: boolean, gfx = live || argv.showPf, game
     if (argv.trace !== undefined) trace = argv.trace;
     if (argv.recording !== undefined) recording = argv.recording;
     // const sound = argv.sound ?? live;
-    Log.init(trace);
+    Log.init(trace, undefined, argv.logFiles ?? true);
     Log.log(['console'], 'Initializing....');
     Events.resetAll();
     resetMachine(live);

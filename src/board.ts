@@ -1,22 +1,23 @@
 import { DelimiterParser, SerialPort } from "serialport";
 import { BoardBootEvent, Event, Events, EventSource, SwitchEvent } from "./event";
 import { Log } from "./log";
-import { Init, machine } from "./machine";
+import { Init, machine, Outputs } from "./machine";
 import { Coil } from "./machine";
 import { Switch } from "./switch";
-import { Clock } from "./time";
+import { clock, Clock, Timer } from "./time";
+import { Opaque } from "./util";
 
+export type BoardTime = Opaque<number, 'BoardTime'>;
 
 export class Board extends EventSource implements Init {
   coils: Coil[] = [];
   switches: Switch[] = [];
   isConnected = false;
 
-  timeOffset = 0 as Clock; // add to remote time to get local
-  adjust(time: number|string): Clock { // convert remote time to local
-    if (typeof time === 'string') time = parseFloat(time);
-    return (time + (this.timeOffset as number)) as Clock;
-  };
+  // timeOffset = 0 as Clock; // add to remote time to get local
+  // protected adjustTime(time: Clock): Clock { // convert remote time to local
+  //   return (time + (this.timeOffset)) as Clock;
+  // };
 
   async init() {
 
@@ -25,6 +26,21 @@ export class Board extends EventSource implements Init {
   async stop() {
 
   }  
+}
+
+class BoardAckEvent extends Event {
+  constructor(
+    public number: number,
+    public dms: number,
+    source: EventSource,
+    rawData: any,
+  ) {
+    super(source, rawData);
+  }
+}
+
+class BoardConnectEvent extends Event {
+
 }
 
 export class SerialBoard extends Board {
@@ -49,7 +65,6 @@ export class SerialBoard extends Board {
     await new Promise<void>((resolve, reject) => this.port.open(err => err? reject(err) : resolve()));
     Log.log('mpu', 'opened connection to %s', this.path);
     this.parser.on('data', (buffer: Buffer) => {
-      this.isConnected = true;
       const dataStr = `'${buffer.toString("ascii")}'/${buffer.toString('hex')}`;
       Log.info('mpu', 'Got data on UART %s: %s ', this.path, dataStr);
       const startIndex = buffer.lastIndexOf(SerialBoard.StartByte)+1;
@@ -74,10 +89,22 @@ export class SerialBoard extends Board {
         Events.pending.push(e);
       }
       if (str.startsWith('hello')) {
+        if (this.isConnected)
+          Log.error('mpu', 'driver board %s rebooted!', this.path);
         onEvent(new BoardBootEvent(this, cmd));
+        void this.sayHello("hello");
       }
-      else if (str.startsWith('de ') || str.startsWith('sw ')) {
-        const inputs = Number.parseInt(str.substring(3), 16);
+      else if (str.startsWith('ack')) {
+        const [num, dms] = str.substring(4).split(' ').map(s => Number.parseInt(s, 16));
+        onEvent(new BoardAckEvent(num, dms, this, cmd));
+      }
+      else if (str.startsWith('iq ') || str.startsWith('sw ')) {
+        const [inputs, dms, triggered, untriggered] = str.substring(3).split(' ').map(s => Number.parseInt(s, 16));
+        // const inputs = cmd.readUInt32BE(4);
+        // const dms = cmd.readUInt32BE(8);
+        // const triggered = cmd.readUInt8(12);
+        // const untriggered = cmd.readUInt8(13);
+        // const ts = (dms/10).toFixed(1);
         if (inputs === this.lastInputState)
           Log.error('mpu', 'no changes detected from switch event');
         else {
@@ -89,25 +116,87 @@ export class SerialBoard extends Board {
               if (!sw)
                 Log.error('mpu', 'got event for unknown switch %i -> %s on board %s', i, newState>0, this.path);
               else
-                onEvent(new SwitchEvent(sw, (newState>0) !== sw.inverted, this, cmd));
+                onEvent(new SwitchEvent(sw, (newState>0) !== sw.inverted, dms/10 as BoardTime, this, cmd));
             }
           }
+          if (triggered !== 255)
+            Log.log('console', "coil %i triggered at %s (%s)", triggered, (dms/10).toFixed(1).slice(-5), this.path);
+          if (untriggered !== 255)
+            Log.log('console', "coil %i untriggered at %s (%s)", untriggered, (dms/10).toFixed(1).slice(-5), this.path);
+          Log.log('console', "switch event at %s remote (%s)", (dms/10).toFixed(1).slice(-5), this.path);
           this.lastInputState = inputs;
         }
       }
       else
         Log.error('mpu', 'unrecognized command "%s"/%s from board %s', str, cmd.toString('hex'), this.path);
     });
-    this.port.on('error', err => {
-      Log.error('mpu', '%s error: ', this.path, err);
-    });
+    this.port.on('error', err => this.onError(err));
     this.port.on('close', () => {
       Log.info('mpu', '%s closed', this.path);
       this.isConnected = false;
     });
+
+    void this.sayHello();
   }
 
-  async sendCommand(cmd: Buffer) {
+  async sayHello(source = "ack") {
+    Log.info("mpu", "saying hello... (%s)", this.path);
+    return this.ack(undefined, true)
+      .then((dmsOffset) => {
+        Log.log('mpu', 'connected to board %s', this.path);
+        // this.timeOffset = dmsOffset / 10 as Clock;
+        // Log.info('mpu', '%s time offset: ', this.path, this.timeOffset);
+        Events.pending.push(new BoardConnectEvent(this, source));
+        void this.onConnect();
+      })
+      .catch(() => {
+        Log.error('mpu', 'no response from board %s', this.path);
+        this.isConnected = false;
+      });
+  }
+
+  async onConnect() {
+    this.isConnected = true;
+    Log.log('machine', 'configuring board %s...', this.path);
+    for (const coil of this.coils) {
+      await coil.init();
+    }
+    Log.log('machine', 'configured %i coils for board %s', this.coils.length, this.path);
+  }
+
+  protected onError(err: Error) {
+    Log.error('mpu', '%s error: ', this.path, err);
+  }
+
+  async ack(timeout = 200, force = false): Promise<number> {
+    const num = Math.floor(Math.random()*9);
+    const buf = Buffer.alloc(3);
+    buf.write('AK');
+    buf.writeUint8(num, 2);
+    Log.log('mpu', 'sending ack %i to %s', num, this.path);
+    
+    const [ev, dms] = await Promise.all([
+      new Promise<BoardAckEvent>((resolve, reject) => {
+        machine.timers.push(new class extends Timer<Clock> {
+          override update(events: Event[], out: Partial<Outputs>): "remove" | undefined {
+            const eve = events.find(e => e instanceof BoardAckEvent && e.number === num) as BoardAckEvent | undefined;
+            if (eve) {
+              resolve(eve);
+              return 'remove';
+            }
+            return super.update(events, out);
+          }
+        }(clock, `board ${this.path} ack ${num}`, timeout as Clock, () => {
+          reject(`ack timed out after ${timeout} ms`);
+          return 'remove';
+        }));
+      }),
+      this.sendCommand(buf, force),
+    ]);
+    return dms - ev.dms;
+  }
+
+  sendCommand(cmd: Buffer, force = false): number {
     const data = Buffer.alloc(cmd.length + 4);
     data.writeUint8(cmd.length+1, 1);
     cmd.copy(data, 2, 0);
@@ -116,15 +205,20 @@ export class SerialBoard extends Board {
     if (!checksum || checksum >= SerialBoard.EndByte) 
       checksum = 1;
     data.writeUInt8(SerialBoard.StartByte, 0);
+    // data.writeUInt8((Math.random()*100+32)|0, 1);
     data.writeUInt8(checksum, cmd.length + 2);
     data.writeUInt8(SerialBoard.EndByte, cmd.length + 3);
 
-    Log.info('mpu', (machine.isLive?'(fake) ': '') + 'Send command ', data.toString('hex'));
-    if (!machine.isLive) return;
-    await new Promise<void>((resolve, reject) =>
-      this.port.write(data, undefined, (err) => err? reject(err) : resolve()));
-    return new Promise<void>((resolve, reject) =>
-      this.port.drain((err) => err? reject(err) : resolve()));
+    Log.info('mpu', (!machine.isLive?'(fake) ' : !this.isConnected? '(not connected) ' : '') + 'Send command %s to %s', data.toString('hex'), this.path);
+    if ((!machine.isLive || !this.isConnected) && !force) return 0;
+    const sendTime = process.hrtime()[1]/100000;
+    // await new Promise<void>((resolve, reject) =>
+    //   this.port.write(data, undefined, (err) => err? reject(err) : resolve()));
+    this.port.write(data, undefined, err => err && this.onError(err));
+    // await new Promise<void>((resolve, reject) =>
+    //   this.port.drain((err) => err? reject(err) : resolve()));
+    this.port.drain(err => err && this.onError(err));
+    return sendTime;
   }
 
   override async stop() {

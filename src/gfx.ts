@@ -2,7 +2,7 @@ import { AminoGfx, AminoImage, Circle, fonts, Group, ImageView, Node, Polygon, P
 import * as fs from 'fs';
 import { Color, colorToHex, LightState, normalizeLight } from './light';
 import { Log } from './log';
-import { CoilOutputs, Light, LightOutputs, Machine, machine, resetMachine } from './machine';
+import { CoilOutputs, Light, LightOutputs, Machine, machine, resetMachine, TriggerCoil } from './machine';
 import { Mode } from './mode';
 import { assert, Dict, eq } from './util';
 import yargs from "yargs/yargs";
@@ -10,6 +10,7 @@ import { Switch } from './switch';
 import { Event, Events, EventSource, SwitchEvent } from './event';
 import { clock, frame } from './time';
 import { Coil } from './machine';
+import { BoardTime } from './board';
 const argv = yargs(process.argv.slice(2)).options({
   showPf: { type: 'boolean', default: false},
   split: { type: 'boolean', default: false},
@@ -136,6 +137,7 @@ const gfxSwitches: { [name in keyof Machine as RemoveLeadingSAndLowercase<name>]
   trough4:  { x: 14.54, y: 2.3800000000000026 },
   troughJam:  { x: 17.897499999999997, y: 2.167500000000004 },
   spinner:  { x: 14.667499999999999, y: 29.240000000000002 },
+  behindRightDropsTarget: { x: 22.572499999999998, y: 19.9325 },
 };
 
 
@@ -149,7 +151,7 @@ abstract class FxLight extends Group implements GfxNode {
     public name: keyof LightOutputs = light.name,
   ) {
     super(pfx!);
-    const {x,y} = gfxLights[name];
+    const {x, y} = gfxLights[name];
     this.x(x);
     this.y(y);
   }
@@ -203,7 +205,7 @@ abstract class FxLight extends Group implements GfxNode {
   }
 
   update(events: Event[]): void {
-    if (this.light.lastActualChange.now)
+    if (this.light.lastActualChange.now(frame))
       this.set(this.light.actual);
   }
 }
@@ -257,7 +259,7 @@ class FxSwitch extends Rect implements GfxNode {
     this.originX(0.5).originY(0.5);
     this.w(0.5).h(0.5);
 
-    const {x,y} = gfxSwitches[sw.name as keyof typeof gfxSwitches]!;
+    const {x, y} = gfxSwitches[sw.name as keyof typeof gfxSwitches]!;
     this.x(x).y(y);
 
     this.fill(sw.state? '#ff0000' : '#ffffff');
@@ -265,16 +267,16 @@ class FxSwitch extends Rect implements GfxNode {
     pfx!.on('press', this, (e) => {
       Log.info(['gfx', 'switch', 'console'], 'force state of %s to %s', sw.name, !sw.state? 'on':'off');
       // sw.changeState(!sw.state, 'force');
-      Events.pending.push(new SwitchEvent(sw, !sw.state, screenSource, e));
+      Events.pending.push(new SwitchEvent(sw, !sw.state, clock() as any, screenSource, e));
       if (e.button === 1)
-        void clock.wait(250).then(() => Events.pending.push(new SwitchEvent(sw, !sw.state, screenSource, e)));
+        void clock.wait(250).then(() => Events.pending.push(new SwitchEvent(sw, !sw.state, clock() as any, screenSource, e)));
     });
   }
 
   update(events: Event[]): void {
     for (const e of events)
       if (e instanceof SwitchEvent && e.sw === this.sw)
-        this.fill(this.sw.state? '#ff0000' : '#fffff');
+        this.fill(this.sw.rawState? '#ff0000' : '#fffff');
   }
 }
 
@@ -296,7 +298,10 @@ class FxCoil extends Rect implements GfxNode {
   }
 
   update(events: Event[]): void {
-    this.fill(this.coil.actual? '#ff0000' : (this.coil.pending? '#ff6600' : '#fffff'));
+    if (this.coil instanceof TriggerCoil)
+      this.fill(this.coil.actual || (this.coil.pending && this.coil.disabled)? '#ff0066' : (this.coil.pending? '#ff6666' : '#fffff'));
+    else
+      this.fill(this.coil.actual || (this.coil.pending && this.coil.disabled)? '#ff0000' : (this.coil.pending? '#ff6600' : '#fffff'));
   }
 }
 
@@ -551,8 +556,8 @@ export class Pie extends Polygon {
   radius!: Property<this>;
   steps!: Property<this>;
 
-  constructor(gfx: AminoGfx) {
-    super(gfx);
+  constructor(aminoGfx: AminoGfx) {
+    super(aminoGfx);
   }
 
   override init() {
@@ -631,8 +636,8 @@ export class Playfield extends Group {
     }
     this.add(pfx!.createRect().w(Playfield.w).h(Playfield.h).originX(0).originY(0).fill('#000000'));
     // if (split) {
-      this.bg.opacity(.8);
-      this.add(this.bg);
+    this.bg.opacity(.8);
+    this.add(this.bg);
     // }
 
     for (const name of Object.keys(gfxLights) as (keyof LightOutputs)[]) {

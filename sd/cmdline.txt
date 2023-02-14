@@ -1,0 +1,1 @@
+root=PARTUUID=40cbb501-02 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait

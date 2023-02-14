@@ -149,7 +149,7 @@ module.exports = {
     "no-dupe-else-if": on,
     "no-dupe-keys": on,
     "no-duplicate-case": on,
-    "no-duplicate-imports": on,
+    "no-duplicate-imports": off,
     "no-ex-assign": on,
     "no-extra-parens": off,
     "@typescript-eslint/no-extra-parens": off,

@@ -1,0 +1,5 @@
+#!/bin/sh
+
+rm -rf sgame.log
+
+tmux new -sgame -- './start |& tee sgame.log'

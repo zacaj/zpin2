@@ -1,0 +1,3 @@
+#!/bin/sh
+
+rsync -av . 192.168.2.19:/zpin2

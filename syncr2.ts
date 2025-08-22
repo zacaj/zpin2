@@ -1,23 +1,28 @@
 import * as fs from 'fs';
 import * as path from 'path';
-const scp = require('scp2').Client;
+import { Client } from 'node-scp'
+
+// const scp = require('scp2').Client;
 
 // if (!process.argv[2]) {
 //     throw 'remote path required';
 // }
 const remotePath = process.argv[3] || 'zpin2';
 const localPath = process.argv[4] || './';
-const address = process.argv[2] || '192.168.2.45';
+const address = process.argv[2] || '192.168.2.19';
 const username = 'zacaj' || process.argv[5];
 const password = 'pass' || process.argv[6];
 const toCopy: string[] = [];
-const client = new scp({
+console.log('connecting to '+address);
+Client({
     port: 22,
     host: address,
     username,
-    password,
-    readyTimeout: 0,
-});
+    privateKey: fs.readFileSync('C:/Users/zacaj/.ssh/id_rsa')
+    // password,
+    // readyTimeout: 0,
+}).then(async client => {
+    // await client.uploadDir()
 /*console.log("starting...");
 copyFile('./**').then(() =>*/ {
     console.log('watching, waiting');
@@ -64,17 +69,18 @@ async function sync() {
     }
     setTimeout(sync, 50);
 }
-function copyFile(filename: string): Promise<void> {
-    const remote = path.join(remotePath, filename);
-    return new Promise((resolve, reject) => {
+async function copyFile(filename: string): Promise<void> {
+    const remote = path.posix.join(remotePath, filename);
+    // return new Promise((resolve, reject) => {
         // scp(filename, `${username}:${password}@${address}:${remote}`, (err: Error) => {
         //     if (err) reject(err);
         //     else resolve();
         // });
         console.log('copy %s to %s', path.join(localPath, filename), remote);
-        client.upload(path.join(localPath, filename), remote, (err: Error) => {
-            if (err) reject(err);
-            else resolve();
-        });
-    });
+        await client.uploadFile(path.join(localPath, filename), remote);
+        // });
+    // });
 }
+}).catch(err => {
+    console.error('client error: ', err);
+});

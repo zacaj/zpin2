@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
+    "sync": "ts-node syncr 192.168.2.40",
+    "sync2": "ts-node syncr 192.168.2.41",
     "test": "jest --watchAll --coverage=false --maxWorkers=100% --passWithNoTests",
     "test:cov": "jest --watchAll --coverage --maxWorkers=100% --passWithNoTests"
   },

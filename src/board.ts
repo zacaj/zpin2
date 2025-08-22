@@ -54,9 +54,10 @@ export class SerialBoard extends Board {
   
   constructor(
     public path: string,
+    public baudRate = 1000000,
   ) {
     super();
-    this.port = new SerialPort({ path: this.path, baudRate: 115200, stopBits: 2, parity: 'none', autoOpen: false });
+    this.port = new SerialPort({ path: this.path, baudRate, stopBits: 2, parity: 'none', autoOpen: false });
     this.parser = this.port.pipe(new DelimiterParser({ delimiter: Buffer.from([SerialBoard.EndByte]) }));
   }
 
@@ -66,7 +67,7 @@ export class SerialBoard extends Board {
     Log.log('mpu', 'opened connection to %s', this.path);
     this.parser.on('data', (buffer: Buffer) => {
       const dataStr = `'${buffer.toString("ascii")}'/${buffer.toString('hex')}`;
-      Log.info('mpu', 'Got data on UART %s: %s ', this.path, dataStr);
+      Log.info('mpu', 'Got data on UART %s: %s ', this.path, dataStr); 
       const startIndex = buffer.lastIndexOf(SerialBoard.StartByte)+1;
       if (startIndex === -1) {
         Log.error('mpu', 'got malformed data %s, cannot find start byte. dropping', dataStr);
@@ -76,12 +77,13 @@ export class SerialBoard extends Board {
       let checksum = buffer[startIndex];
       for (let i=0; i<cmd.length; i++)
         checksum += cmd[i];
+      const whole = checksum;
       checksum &= 0xFF;
       if (!checksum || checksum >= SerialBoard.EndByte) 
         checksum = 1;
       const correct = buffer[buffer.length - 1];
       if (checksum !== correct) {
-        Log.error('mpu', 'got malformed data %s, incorrect checksum (calculated %i, got %i).  dropping', dataStr, checksum, correct);
+        Log.error('mpu', 'got malformed data %s, incorrect checksum (calculated %i/%i, got %i).  dropping', dataStr, checksum, whole, correct);
         return;
       }
       const str = cmd.toString('ascii');
@@ -105,8 +107,12 @@ export class SerialBoard extends Board {
         // const triggered = cmd.readUInt8(12);
         // const untriggered = cmd.readUInt8(13);
         // const ts = (dms/10).toFixed(1);
+        if (inputs === 0xFFFFFFFF) {
+          Log.error('mpu', "SWITCH DROP %x %x on %s", triggered, untriggered, this.path);
+          return;
+        }
         if (inputs === this.lastInputState)
-          Log.error('mpu', 'no changes detected from switch event');
+          Log.info('mpu', 'no changes detected from switch event');
         else {
           for (let i=0; i<32; i++) {
             const oldState = this.lastInputState & (1<<i);
@@ -115,7 +121,7 @@ export class SerialBoard extends Board {
               const sw = this.switches.find(s => s.num === i);
               if (!sw)
                 Log.error('mpu', 'got event for unknown switch %i -> %s on board %s', i, newState>0, this.path);
-              else
+              else //if (!sw.name.includes('Flipper'))
                 onEvent(new SwitchEvent(sw, (newState>0) !== sw.inverted, dms/10 as BoardTime, this, cmd));
             }
           }
@@ -126,6 +132,10 @@ export class SerialBoard extends Board {
           Log.log('console', "switch event at %s remote (%s)", (dms/10).toFixed(1).slice(-5), this.path);
           this.lastInputState = inputs;
         }
+      }
+      else if (str.startsWith('r ')) {
+        const [rChecksum] = str.substring(2).split(' ').map(s => Number.parseInt(s, 16));
+        Log.info('mpu', 'confirmed command with checksum %s got to board %s', rChecksum.toString(16), this.path);
       }
       else
         Log.error('mpu', 'unrecognized command "%s"/%s from board %s', str, cmd.toString('hex'), this.path);
@@ -170,8 +180,8 @@ export class SerialBoard extends Board {
 
   async ack(timeout = 200, force = false): Promise<number> {
     const num = Math.floor(Math.random()*9);
-    const buf = Buffer.alloc(3);
-    buf.write('AK');
+    const buf = Buffer.alloc(5);
+    buf.write('AK# 0');
     buf.writeUint8(num, 2);
     Log.log('mpu', 'sending ack %i to %s', num, this.path);
     
@@ -214,7 +224,11 @@ export class SerialBoard extends Board {
     const sendTime = process.hrtime()[1]/100000;
     // await new Promise<void>((resolve, reject) =>
     //   this.port.write(data, undefined, (err) => err? reject(err) : resolve()));
-    this.port.write(data, undefined, err => err && this.onError(err));
+    const d2 = Buffer.alloc(data.length + 4);
+    d2.writeInt16BE(0, 0);
+    data.copy(d2, 2);
+    d2.writeInt16BE(0, d2.length-2);
+    this.port.write(d2, undefined, err => err && this.onError(err));
     // await new Promise<void>((resolve, reject) =>
     //   this.port.drain((err) => err? reject(err) : resolve()));
     this.port.drain(err => err && this.onError(err));

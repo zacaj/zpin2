@@ -66,5 +66,6 @@ process.on('unhandledRejection', (err, promise) => {
 
 
 if (require.main === module) {
+  process.title = 'zpin2';
   initMachine(false);
 }

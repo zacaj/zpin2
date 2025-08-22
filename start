@@ -1,3 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 
-node build/init.js --live --no-gfx --no-trace
+if pgrep -x zpin2 >/dev/null
+then
+  echo "game already running"
+else
+  node build/init.js --live --no-gfx --no-trace
+fi

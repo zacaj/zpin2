@@ -18,17 +18,16 @@ export interface Init {
 export abstract class Output<T, Outs = Outputs> implements Init {
   static id = 1;
   id = Output.id++;
-  pending!: T;
+  actual?: T;
   // lastActualChange = frame();
   // lastPendingChange = frame();
   lastActualChange = Instant.now();
   tryStartedAt?: Instant;
 
   constructor(
-    public actual: T,
+    public pending: T,
     public name: keyof Outs,
   ) {
-    this.pending = actual;
   }
 
   trySet(): Promise<void>|void {
@@ -72,7 +71,10 @@ export abstract class Output<T, Outs = Outputs> implements Init {
   }
 
   update() {
-    if (this.disabled) return;
+    if (this.disabled) {
+      this.actual = undefined;
+      return;
+    }
     void this.trySet();
   }
 
@@ -114,6 +116,7 @@ export type CoilConfig = {
   holdLength: number;
   holdOnDms: number;
   holdOffDms: number;
+  maxOnMs: number;
 };
 
 export class Coil extends Output<boolean, CoilOutputs> {
@@ -139,14 +142,15 @@ export class Coil extends Output<boolean, CoilOutputs> {
       holdOnDms: 10,
       strokeLength: 0,
       strokeOffDms: 0,
-      strokeOnDms: 10,
+      strokeOnDms: 1,
+      maxOnMs: 0,
       ...cfg,
     };
 
     this.board.coils.push(this);
   }
 
-  ms(ms: number, off?: number, on?: number): this {
+  ms(ms: number, on?: number, off?: number): this {
     this.config.strokeLength = ms;
     if (off !== undefined)
       this.config.strokeOffDms = off;
@@ -156,12 +160,18 @@ export class Coil extends Output<boolean, CoilOutputs> {
     return this;
   }
 
-  hold(ms: number, off?: number, on?: number): this {
+  hold(ms: number, on?: number, off?: number): this {
     this.config.holdLength = ms;
     if (off !== undefined)
       this.config.holdOffDms = off;
     if (on !== undefined)
       this.config.holdOnDms = on;
+    this.configDirty = true;
+    return this;
+  }
+
+  maxOnTime(ms: number): this {
+    this.config.maxOnMs = ms;
     this.configDirty = true;
     return this;
   }
@@ -204,7 +214,7 @@ export class Coil extends Output<boolean, CoilOutputs> {
     // if (!MPU.isLive && gfx && !curRecording && this.fake) void wait(100).then(() => this.fake!());
     {
       const buf = Buffer.alloc(3);
-      buf.write('CS');
+      buf.write('FS');
       buf.writeUint8(this.num, 1);
       this.board.sendCommand(buf);
     }
@@ -213,7 +223,7 @@ export class Coil extends Output<boolean, CoilOutputs> {
     return true;
   }
 
-  set(on: boolean) {
+  override async set(on: boolean) {
     if (on) {
       if (this.lastFired?.wasWithin(this.wait, clock))
         return false;
@@ -235,7 +245,8 @@ export class Coil extends Output<boolean, CoilOutputs> {
 
   updateConfig() {
     if (this.num < 0) return;
-    const buf = Buffer.alloc(11);
+    const buf = Buffer.alloc(12);
+    Log.info('solenoid', 'cfg coil %i with ', this.num, JSON.stringify(this.config));
     buf.write('CS');
     buf.writeUint8(this.num, 2);
     buf.writeUInt16BE(this.config.strokeLength, 3);
@@ -244,6 +255,7 @@ export class Coil extends Output<boolean, CoilOutputs> {
     buf.writeUInt16BE(this.config.holdLength, 7);
     buf.writeUint8(this.config.holdOnDms, 9);
     buf.writeUint8(this.config.holdOffDms, 10);
+    buf.writeUint8(this.config.maxOnMs, 11);
     this.board.sendCommand(buf);
     this.configDirty = false;
   }
@@ -339,12 +351,13 @@ export class IncreaseCoil extends Coil {
 // }
 
 export class TriggerCoil extends Coil {
+  minOffMs = 0;
+
   constructor(
     name: keyof CoilOutputs,
     num: number,
     board: SerialBoard,
     public sw: Switch,
-    public minOffDms = 1,
     cfg?: Partial<CoilConfig>,
   ) {
     super(name, num, board, cfg);
@@ -361,23 +374,35 @@ export class TriggerCoil extends Coil {
   //   await this.set(this.actual)
   // }
 
-  override set(enabled: boolean): boolean {
+  override async set(enabled: boolean): Promise<boolean> {
     if (this.configDirty)
       this.updateConfig();
+    // await clock.wait(300);
 
     const buf = Buffer.alloc(12);
     buf.write('TS');
     buf.writeUint8(this.num, 2);
-    buf.writeUInt8(this.minOffDms, 11);
+    buf.writeUInt8(this.minOffMs, 11);
     if (enabled) {
       buf.writeUInt32BE(1 << this.sw.num, 3);
+
+      if (!this.config.holdLength && !this.config.strokeLength) {
+        Log.error('solenoid', 'solenoid %s has no time!', this.name);
+        return true;
+      }
       // buf.writeUInt32BE(1 << this.sw.num, 7);
       Log.info('solenoid', 'solenoid %s trigger enabled', this.name);
     }
     else
       Log.info('solenoid', 'solenoid %s trigger disabled', this.name);
     this.board.sendCommand(buf);
+    // await clock.wait(300);
     return true;
+  }
+
+  minSwOffMs(ms: number): this {
+    this.minOffMs = ms;
+    return this;
   }
 }
 
@@ -485,8 +510,7 @@ const defaultOutputs: Outputs = {
 };
 
 export class Machine {
-  node1 = new SerialBoard("/dev/ttyAMA1");
-  // node1 = new SerialBoard("/dev/ttyAMA0");
+  node1 = new SerialBoard("/dev/ttyAMA0");
   node2 = new SerialBoard("/dev/ttyAMA1");
   node3 = new SerialBoard("/dev/ttyAMA2");
   node4 = new SerialBoard("/dev/ttyAMA3");
@@ -494,7 +518,7 @@ export class Machine {
   boards: Board[] = [
     this.mpu,
     this.node1,
-    // this.node2,
+    this.node2,
     // this.node3,
     // this.node4,
   ];
@@ -598,16 +622,16 @@ export class Machine {
   sLeftScoopExit = Switch.new(this.node3, 31);
   //#endregion
   //#region coils
-  cLeftFlipperPower = new TriggerCoil('leftFlipperPower', 0, this.node1, this.sLeftFlipperSwitch).ms(12).hold(30);
-  cLeftFlipperHold = new TriggerCoil('leftFlipperHold', 1, this.node1, this.sLeftFlipperSwitch).ms(12).hold(Coil.MaxLen);
-  cRightPop = new TriggerCoil('rightPop', 2, this.node1, this.sRightPop).ms(40);
+  cLeftFlipperPower = new TriggerCoil('leftFlipperPower', 0, this.node1, this.sLeftFlipperSwitch).ms(12, 1, 1).hold(Coil.MaxLen, 4, 1).maxOnTime(50).minSwOffMs(0);
+  cLeftFlipperHold = new TriggerCoil('leftFlipperHold', 1, this.node1, this.sLeftFlipperSwitch).ms(12).hold(Coil.MaxLen).minSwOffMs(0);
+  cRightPop = new TriggerCoil('rightPop', 2, this.node1, this.sRightPop).ms(70).minSwOffMs(60);
   cRightVuk = new IncreaseCoil('rightVuk', 3, this.node1).ms(40);
   cRightScoop = new IncreaseCoil('rightScoop', 4, this.node1).ms(40);
-  cKickback = new TriggerCoil('kickback', 5, this.node1, this.sKickback).ms(40);
-  cUpperSling = new TriggerCoil('upperSling', 6, this.node1, this.sUpperSling).ms(40);
-  cRightFlipperPower = new TriggerCoil('rightFlipperPower', 8, this.node1, this.sRightFlipperSwitch).ms(12).hold(30);
-  cRightFlipperHold = new TriggerCoil('rightFlipperHold', 9, this.node1, this.sRightFlipperSwitch).ms(12).hold(Coil.MaxLen);
-  cRightSling = new TriggerCoil('rightSling', 10, this.node1, this.sRightSling).ms(40);
+  cKickback = new TriggerCoil('kickback', 5, this.node1, this.sKickback).ms(40).minSwOffMs(100);
+  cUpperSling = new TriggerCoil('upperSling', 6, this.node1, this.sUpperSling).ms(40).minSwOffMs(160);
+  cRightFlipperPower = new TriggerCoil('rightFlipperPower', 8, this.node1, this.sRightFlipperSwitch).ms(12, 1, 1).hold(Coil.MaxLen, 4, 1).maxOnTime(50).minSwOffMs(0);
+  cRightFlipperHold = new TriggerCoil('rightFlipperHold', 9, this.node1, this.sRightFlipperSwitch).ms(12).hold(Coil.MaxLen).minSwOffMs(0);
+  cRightSling = new TriggerCoil('rightSling', 10, this.node1, this.sRightSling).ms(40, 1, 1).minSwOffMs(160);
   cRightDropReset = new IncreaseCoil('rightDropReset', 11, this.node1).ms(40);
   cTrough = new Coil('trough', 12, this.node1).ms(40);
   cLeftDropReset = new IncreaseCoil('leftDropReset', 0, this.node2).ms(50);
@@ -617,11 +641,11 @@ export class Machine {
   cLeftDrop4 = new IncreaseCoil('leftDrop4', 4, this.node2);
   cLeftDrop5 = new IncreaseCoil('leftDrop5', 5, this.node2);
   cLeftDrop6 = new IncreaseCoil('leftDrop6', 6, this.node2);
-  cUpperFlipperPower = new TriggerCoil('upperFlipperPower', 8, this.node2, this.sUpperFlipperSwitch);
-  cUpperFlipperHold = new TriggerCoil('upperFlipperHold', 9, this.node2, this.sUpperFlipperSwitch);
-  cLeftPop = new TriggerCoil('leftPop', 10, this.node2, this.sLeftPop);
+  cUpperFlipperPower = new TriggerCoil('upperFlipperPower', 8, this.node2, this.sUpperFlipperSwitch).ms(12, 1, 1).hold(Coil.MaxLen, 4, 1).maxOnTime(50).minSwOffMs(0); 
+  cUpperFlipperHold = new TriggerCoil('upperFlipperHold', 9, this.node2, this.sUpperFlipperSwitch).ms(12).hold(Coil.MaxLen);
+  cLeftPop = new TriggerCoil('leftPop', 10, this.node2, this.sLeftPop).ms(40).minSwOffMs(60);
   cLeftVuk = new IncreaseCoil('leftVuk', 11, this.node2);
-  cLeftSling = new TriggerCoil('leftSling', 12, this.node2, this.sLeftSling);
+  cLeftSling = new TriggerCoil('leftSling', 12, this.node2, this.sLeftSling).ms(40, 1, 1).minSwOffMs(160);
   cSubwayDiverter = new Coil('subwayDiverter', 13, this.node2);
   cMagnet = new Coil('magnet', 0, this.node3).ms(50);
   cLeftScoop = new IncreaseCoil('leftScoop', 1, this.node3).ms(50);
@@ -709,9 +733,10 @@ export class Machine {
 
     {
       const outputState = this.root.calcGlobalOutputs();
-      this.coils.filter(c => c instanceof TriggerCoil).forEach(c => {
-        outputState[c.name] ??= outputState.enableKickers;
-      });
+      if (outputState.enableKickers !== undefined)
+        this.coils.filter(c => c instanceof TriggerCoil).forEach(c => {
+          outputState[c.name] ??= outputState.enableKickers;
+        });
       this.outputState = {...defaultOutputs, ...outputState};
 
       for (const name of this.outputState.keys()) {

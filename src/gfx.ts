@@ -206,7 +206,7 @@ abstract class FxLight extends Group implements GfxNode {
 
   update(events: Event[]): void {
     if (this.light.lastActualChange.now(frame))
-      this.set(this.light.actual);
+      this.set(this.light.actual!);
   }
 }
 
